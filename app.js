@@ -1782,33 +1782,31 @@ async function loadSAGlobal() {
     <div class="table-container">
       <table class="table global-table">
         <thead><tr>
-          <th>Nombre</th><th>Cédula</th>
-          ${areas.map(a => `<th style="font-size:0.7rem">${a.NOMBRE}</th>`).join("")}
-          <th>Estado</th><th>Pendientes</th><th>Acción</th>
+          <th class="col-nombre">Nombre</th>
+          ${areas.map(a => `<th class="col-area" title="${a.NOMBRE}">${a.NOMBRE.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,4)}</th>`).join("")}
         </tr></thead>
         <tbody>
           ${colaboradores.filter(c => c.requierePazSalvo).map(c => `
-            <tr>
-              <td>${c.nombre}</td>
-              <td style="font-family:var(--font-mono); font-size:0.78rem">${c.cedula}</td>
+            <tr class="${c.estadoGeneral==="COMPLETO"?"row-completo":""}">
+              <td class="col-nombre">
+                <div class="global-nombre">${c.nombre}</div>
+                <div class="global-cedula">${c.cedula}</div>
+                <div class="global-acciones">
+                  ${c.estadoGeneral === "COMPLETO"
+                    ? `<span class="badge badge-aprobado" style="font-size:0.65rem">✓ Completo</span>`
+                    : `<span style="font-size:0.7rem; color:var(--text3)">⏳ ${c.pendientes.length} pend.</span>
+                       <button class="btn-icon-action" title="Enviar recordatorio"
+                         onclick="enviarRecordatorio('${c.id}', '${c.nombre.replace(/'/g,"\\'")}')">📧</button>
+                       <button class="btn-icon-action btn-icon-warn" title="Forzar paz y salvo completo"
+                         onclick="forzarPazSalvo('${c.id}', '${c.nombre.replace(/'/g,"\\'")}')">⚡</button>`
+                  }
+                </div>
+              </td>
               ${c.estadoPorArea.map(a =>
-                `<td><span class="badge badge-${a.estado.toLowerCase()}" style="font-size:0.65rem"
-                  title="${a.aprobadoPor ? "Por: "+a.aprobadoPor+(a.fecha ? " · "+a.fecha : "") : a.areaNombre}">${a.estado}</span></td>`
+                `<td class="col-area" title="${a.areaNombre}${a.aprobadoPor ? " · "+a.aprobadoPor : ""}">
+                  <span class="dot-estado dot-${a.estado.toLowerCase()}"></span>
+                </td>`
               ).join("")}
-              <td><span class="badge badge-${c.estadoGeneral==="COMPLETO"?"aprobado":"pendiente"}" style="font-size:0.72rem">${c.estadoGeneral}</span></td>
-              <td style="font-size:0.75rem; color:var(--text2)">
-                ${c.estadoGeneral !== "COMPLETO" && c.pendientes && c.pendientes.length
-                  ? `<span title="${c.pendientes.join(', ')}" style="cursor:default; color:var(--yellow)">⏳ ${c.pendientes.length} área(s)</span>`
-                  : `<span style="color:var(--green)">✓</span>`}
-              </td>
-              <td>
-                ${c.estadoGeneral !== "COMPLETO"
-                  ? `<button class="btn btn-ghost btn-sm" style="font-size:0.72rem; padding:3px 8px"
-                      onclick="enviarRecordatorio('${c.id}', '${c.nombre.replace(/'/g,"\\'")}')">
-                      📧 Recordatorio
-                    </button>`
-                  : ""}
-              </td>
             </tr>
           `).join("")}
         </tbody>
@@ -1839,6 +1837,24 @@ async function enviarRecordatorio(colaboradorId, nombre) {
   if (r.errores && r.errores.length) {
     r.errores.forEach(e => toast("Sin correo: " + e, "error"));
   }
+}
+
+// ═══════════════════════════════════════════════════════
+// SUPER ADMIN — FORZAR PAZ Y SALVO
+// ═══════════════════════════════════════════════════════
+async function forzarPazSalvo(colaboradorId, nombre) {
+  const ok = await confirm(
+    "⚡ Forzar Paz y Salvo",
+    `Esto aprobará <strong>todas las áreas</strong> para <strong>${nombre}</strong> como si cada administrador lo hubiera aprobado. Esta acción queda registrada en los logs.<br><br>¿Confirmas que deseas otorgar el paz y salvo completo?`,
+    "Sí, forzar"
+  );
+  if (!ok) return;
+
+  const r = await api("forzar_paz_salvo", { colaboradorId });
+  if (!r.ok) { toast(r.error, "error"); return; }
+
+  toast(r.mensaje, "success");
+  loadSAGlobal();
 }
 
 // Versión para colaboradores: envían el recordatorio para sí mismos
