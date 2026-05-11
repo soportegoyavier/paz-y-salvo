@@ -660,7 +660,49 @@ body {
 }
 
 /* ── GLOBAL GRID TABLE ───────────────────────────────── */
-.global-table { font-size: 0.78rem; }
+.global-table { font-size: 0.78rem; border-collapse: separate; border-spacing: 0; }
+
+.global-table th.col-nombre,
+.global-table td.col-nombre {
+  position: sticky; left: 0; z-index: 2;
+  background: var(--surface2);
+  border-right: 2px solid var(--border);
+  min-width: 180px; max-width: 200px;
+  padding: 8px 10px;
+}
+.global-table thead th.col-nombre { z-index: 3; }
+
+.global-table th.col-area,
+.global-table td.col-area {
+  width: 36px; min-width: 36px; max-width: 36px;
+  text-align: center; padding: 6px 2px;
+  font-size: 0.6rem; color: var(--text3);
+  white-space: nowrap; overflow: hidden;
+}
+
+.global-nombre { font-weight: 500; font-size: 0.8rem; line-height: 1.3; }
+.global-cedula { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text3); margin: 2px 0 5px; }
+.global-acciones { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+.row-completo td { opacity: 0.65; }
+
+.dot-estado {
+  display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  vertical-align: middle;
+}
+.dot-aprobado  { background: var(--green); }
+.dot-pendiente { background: var(--yellow); }
+.dot-rechazado { background: var(--red, #f87171); }
+
+.btn-icon-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 5px; font-size: 0.85rem;
+  background: transparent; border: 1px solid var(--border);
+  cursor: pointer; transition: background 0.15s; flex-shrink: 0;
+}
+.btn-icon-action:hover { background: var(--surface3); }
+.btn-icon-warn { border-color: var(--yellow); }
+.btn-icon-warn:hover { background: rgba(250,204,21,0.12); }
 
 /* ── CONFIRM DIALOG ──────────────────────────────────── */
 .confirm-overlay {

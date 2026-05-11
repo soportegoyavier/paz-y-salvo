@@ -96,6 +96,7 @@ function doPost(e) {
 
       // SUPER ADMIN - Vista global
       case "get_vista_global":    resultado = accionGetVistaGlobal(body); break;
+      case "forzar_paz_salvo":    resultado = accionForzarPazSalvo(body); break;
 
       // DOCUMENTO
       case "generar_documento":   resultado = accionGenerarDocumento(body); break;
@@ -848,6 +849,58 @@ function accionGetVistaGlobal(body) {
   });
 
   return { ok: true, colaboradores: resultado, areas };
+}
+
+// ─── ACCIÓN: FORZAR PAZ Y SALVO (SUPERADMIN) ───────────────
+// Aprueba TODAS las áreas activas del colaborador como si cada admin lo hubiera hecho.
+function accionForzarPazSalvo(body) {
+  const session = body._session;
+  if (session.rol !== "SUPERADMIN") return { ok: false, error: "Acceso denegado" };
+
+  const { colaboradorId } = body;
+  if (!colaboradorId) return { ok: false, error: "ID de colaborador requerido" };
+
+  const colaboradores = sheetToObjects(getSheet(SHEETS.COLABORADORES));
+  const colaborador = colaboradores.find(c => String(c.ID) === String(colaboradorId));
+  if (!colaborador) return { ok: false, error: "Colaborador no encontrado" };
+  if (!esTrue(colaborador.ACTIVO)) return { ok: false, error: "El colaborador no está activo" };
+
+  const areas = sheetToObjects(getSheet(SHEETS.AREAS)).filter(a => esTrue(a.ACTIVO));
+  if (!areas.length) return { ok: false, error: "No hay áreas activas configuradas" };
+
+  const sheet   = getSheet(SHEETS.APROBACIONES);
+  const data    = sheet.getDataRange().getValues();
+  const headers = data[0];
+  const colIdx  = {};
+  headers.forEach((h, i) => { colIdx[h] = i; });
+
+  const timestamp  = timestampActual();
+  const aprobadoPor = session.username;
+  let aprobadas = 0;
+
+  areas.forEach(area => {
+    let fila = -1;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][colIdx.COLABORADOR_ID]) === String(colaboradorId) &&
+          String(data[i][colIdx.AREA_ID])         === String(area.ID)) {
+        fila = i + 1; break;
+      }
+    }
+    if (fila > 0) {
+      sheet.getRange(fila, colIdx.ESTADO        + 1).setValue("APROBADO");
+      sheet.getRange(fila, colIdx.OBSERVACIONES + 1).setValue("");
+      sheet.getRange(fila, colIdx.APROBADO_POR  + 1).setValue(aprobadoPor);
+      sheet.getRange(fila, colIdx.FECHA_ACCION  + 1).setValue(timestamp);
+    } else {
+      sheet.appendRow([generarId(), colaboradorId, String(area.ID), "APROBADO", "", aprobadoPor, timestamp]);
+    }
+    aprobadas++;
+  });
+
+  registrarLog(session.username, session.rol, "FORZAR_PAZ_SALVO",
+    `Colaborador: ${colaborador.NOMBRE} (ID: ${colaboradorId}) — ${aprobadas} área(s) aprobadas`);
+
+  return { ok: true, mensaje: `Paz y salvo otorgado a ${colaborador.NOMBRE} en ${aprobadas} área(s)` };
 }
 
 // ─── ACCIÓN: GENERAR DOCUMENTO ─────────────────────────────
