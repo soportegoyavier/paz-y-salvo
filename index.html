@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paz y Salvo — Colegio Campestre Goyavier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<? try { ?><?!= include('styles') ?><? } catch(e) { ?><link rel="stylesheet" href="styles.css"><? } ?>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════
+     LOGIN
+═══════════════════════════════════════════════════════ -->
+<div id="screen-login" class="screen-full active">
+  <canvas id="login-canvas"></canvas>
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-brand">
+        <img id="login-logo-img" class="login-logo-img" src="" alt="Colegio Campestre Goyavier" style="display:none">
+        <div class="login-logo" id="login-logo-fallback">🏫</div>
+        <h1>Paz y Salvo</h1>
+        <p>Colegio Campestre Goyavier</p>
+      </div>
+
+      <div class="login-tabs">
+        <button class="login-tab active" onclick="setLoginTab('admin')" id="tab-admin">Administrativo</button>
+        <button class="login-tab" onclick="setLoginTab('colaborador')" id="tab-colab">Colaborador</button>
+      </div>
+
+      <div>
+        <div class="form-group">
+          <label class="form-label">Usuario</label>
+          <input type="text" id="login-username" class="form-input" placeholder="Ingresa tu usuario" autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label class="form-label" id="login-pass-label">Contraseña</label>
+          <input type="password" id="login-password" class="form-input" placeholder="Ingresa tu contraseña" autocomplete="current-password">
+        </div>
+        <div class="form-group login-cedula-group" id="login-cedula-group">
+          <label class="form-label">Cédula (para verificar tu estado)</label>
+          <input type="text" id="login-cedula" class="form-input" placeholder="Número de cédula">
+        </div>
+        <button class="btn btn-primary" style="width:100%; margin-top:0.5rem" onclick="handleLogin()" id="login-btn">
+          Ingresar
+        </button>
+
+        <div style="display:flex; align-items:center; gap:0.75rem; margin-top:1rem">
+          <div style="flex:1; height:1px; background:var(--border)"></div>
+          <span style="font-size:0.75rem; color:var(--text3)">o</span>
+          <div style="flex:1; height:1px; background:var(--border)"></div>
+        </div>
+
+        <button class="btn btn-ghost" style="width:100%; margin-top:0.75rem; justify-content:center; gap:8px"
+          onclick="handleLoginGoogle()" id="login-google-btn">
+          <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+            <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+            <path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/>
+            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+          </svg>
+          Ingresar con Google
+        </button>
+
+        <div class="login-error" id="login-error"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     APP SHELL
+═══════════════════════════════════════════════════════ -->
+<div id="screen-app" class="app screen">
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-brand">
+      <img id="header-logo-img" class="header-logo-img" src="" alt="Goyavier" style="display:none">
+      <div class="header-logo" id="header-logo-fallback">🏫</div>
+      <div class="header-divider" id="header-logo-divider" style="display:none"></div>
+      <div class="header-title">
+        Paz y Salvo
+        <span>Colegio Campestre Goyavier</span>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="header-user" id="header-user-info">
+        <span id="header-username">—</span>
+        <span class="role-badge" id="header-role-badge">—</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="handleLogout()">Salir</button>
+    </div>
+  </header>
+
+  <!-- BODY -->
+  <div class="main-layout">
+    <nav class="sidebar" id="sidebar"></nav>
+
+    <main class="content" id="main-content">
+
+      <!-- ── PANEL: MI ESTADO (COLABORADOR) ────────────── -->
+      <div class="content-panel" id="panel-mi-estado">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Mi Estado</h2>
+            <p>Consulta el avance de tu paz y salvo</p>
+          </div>
+        </div>
+        <div id="mi-estado-content">
+          <div class="loading-state"><div class="loading-spinner"></div> Cargando...</div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: ENVIAR PAZ Y SALVO A TH (COLABORADOR) ─── -->
+      <div class="content-panel" id="panel-solicitud-th">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Enviar Paz y Salvo</h2>
+            <p>Envía tu paz y salvo finalizado al área de Talento Humano</p>
+          </div>
+        </div>
+        <div id="th-panel-content">
+          <div class="loading-state"><div class="loading-spinner"></div> Verificando estado...</div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: COLABORADORES ÁREA (ADMIN) ──────────── -->
+      <div class="content-panel" id="panel-area-colaboradores">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2 id="area-panel-title">Colaboradores</h2>
+            <p id="area-panel-subtitle">Gestión de aprobaciones de tu área</p>
+          </div>
+          <div id="area-stats-row" class="stats-row" style="margin-bottom:0; flex:1; max-width:500px;"></div>
+        </div>
+
+        <!-- Bulk actions bar (ADMIN) -->
+        <div class="bulk-bar" id="admin-bulk-bar">
+          <span class="bulk-count" id="admin-bulk-count">0 seleccionados</span>
+          <div class="bulk-actions">
+            <button class="btn btn-success btn-sm" onclick="aprobarMasivo()">✅ Aprobar seleccionados</button>
+          </div>
+        </div>
+
+        <!-- Tabs de área (solo visibles si el admin gestiona más de 1 área) -->
+        <div id="area-tabs-row" style="display:none; gap:6px; flex-wrap:wrap; margin-bottom:0.75rem;"></div>
+
+        <div class="filters-bar">
+          <button class="filter-chip active" onclick="filtrarArea('todos', this)">Todos</button>
+          <button class="filter-chip" onclick="filtrarArea('PENDIENTE', this)">Pendientes</button>
+          <button class="filter-chip" onclick="filtrarArea('APROBADO', this)">Aprobados</button>
+          <button class="filter-chip" onclick="filtrarArea('RECHAZADO', this)">Rechazados</button>
+          <div class="search-box">
+            <span class="search-icon">🔍</span>
+            <input type="text" class="search-input" placeholder="Buscar..." id="area-search" oninput="filtrarArea(null, null)">
+          </div>
+        </div>
+
+        <div class="table-container" id="area-table-container">
+          <div class="table-loading">Cargando colaboradores...</div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: CONFIGURACIÓN ADMIN ────────────────── -->
+      <div class="content-panel" id="panel-admin-config">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Configuración</h2>
+            <p>Preferencias de tu perfil de administrador</p>
+          </div>
+        </div>
+
+        <div class="panel-tabs">
+          <button class="panel-tab active" onclick="switchAdminTab('notif', this)">📧 Notificaciones</button>
+          <button class="panel-tab" onclick="switchAdminTab('password', this)">🔒 Contraseña</button>
+        </div>
+
+        <!-- Tab: Notificaciones -->
+        <div class="tab-content active" id="admin-tab-notif">
+          <div class="config-card" style="max-width:580px">
+            <div class="config-card-title" style="margin-bottom:0.25rem">Correos de notificación</div>
+            <div class="config-card-desc" style="margin-bottom:1rem">
+              Ingresa tu correo para recibir notificaciones cuando el Super Admin active
+              nuevas solicitudes de paz y salvo en tu área.
+            </div>
+            <div class="form-group">
+              <label class="form-label">Correo electrónico de notificación</label>
+              <input type="email" id="admin-emails-notif" class="form-input"
+                placeholder="ej: mi-correo@colegio.edu.co">
+            </div>
+            <button class="btn btn-primary" onclick="guardarEmailsNotificacion()">💾 Guardar correos</button>
+          </div>
+        </div>
+
+        <!-- Tab: Contraseña Admin -->
+        <div class="tab-content" id="admin-tab-password">
+          <div class="config-card" style="max-width:420px">
+            <div class="config-card-title" style="margin-bottom:1rem">Cambiar contraseña</div>
+            <div class="form-group">
+              <label class="form-label">Contraseña actual</label>
+              <input type="password" id="admin-pw-actual" class="form-input" placeholder="Tu contraseña actual">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Nueva contraseña</label>
+              <input type="password" id="admin-pw-nueva" class="form-input" placeholder="Mínimo 6 caracteres">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Confirmar nueva contraseña</label>
+              <input type="password" id="admin-pw-confirmar" class="form-input" placeholder="Repite la nueva contraseña">
+            </div>
+            <button class="btn btn-primary" onclick="cambiarPasswordAdmin()">🔒 Cambiar contraseña</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: SA - COLABORADORES ─────────────────── -->
+      <div class="content-panel" id="panel-sa-colaboradores">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Colaboradores</h2>
+            <p>Gestión del registro de colaboradores</p>
+          </div>
+          <div class="page-header-actions">
+            <button class="btn btn-ghost btn-sm" onclick="abrirModalCargaMasiva()">📤 Carga masiva</button>
+            <button class="btn btn-primary" onclick="abrirModalCrearColaborador()">+ Nuevo colaborador</button>
+          </div>
+        </div>
+
+        <!-- Bulk bar SA -->
+        <div class="bulk-bar" id="sa-bulk-bar">
+          <span class="bulk-count" id="sa-bulk-count">0 seleccionados</span>
+          <div class="bulk-actions">
+            <button class="btn btn-success btn-sm" onclick="togglePazSalvoMasivo(true)">✅ Activar paz y salvo</button>
+            <button class="btn btn-danger btn-sm" onclick="togglePazSalvoMasivo(false)">⬜ Desactivar paz y salvo</button>
+          </div>
+        </div>
+
+        <div id="sa-collab-table-container" class="table-container">
+          <div class="table-loading">Cargando...</div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: SA - USUARIOS ───────────────────────── -->
+      <div class="content-panel" id="panel-sa-usuarios">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Usuarios Administrativos</h2>
+            <p>Gestión de accesos al sistema</p>
+          </div>
+          <button class="btn btn-primary" onclick="abrirModalCrearUsuario()">+ Nuevo usuario</button>
+        </div>
+        <div id="sa-users-table-container" class="table-container">
+          <div class="table-loading">Cargando...</div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: SA - CONFIGURACIÓN ─────────────────── -->
+      <div class="content-panel" id="panel-sa-config">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Configuración</h2>
+            <p>Parámetros globales del sistema</p>
+          </div>
+        </div>
+
+        <div class="panel-tabs">
+          <button class="panel-tab active" onclick="switchSATab('proceso', this)">⚙️ Proceso</button>
+          <button class="panel-tab" onclick="switchSATab('correos', this)">📧 Correos</button>
+          <button class="panel-tab" onclick="switchSATab('password', this)">🔒 Contraseña</button>
+        </div>
+
+        <!-- Tab: Proceso -->
+        <div class="tab-content active" id="sa-tab-proceso">
+          <div id="sa-config-content">
+            <div class="loading-state"><div class="loading-spinner"></div> Cargando...</div>
+          </div>
+        </div>
+
+        <!-- Tab: Correos -->
+        <div class="tab-content" id="sa-tab-correos">
+          <!-- Correo de Talento Humano -->
+          <div class="config-card" style="max-width:580px; margin-bottom:1rem">
+            <div class="config-card-title" style="margin-bottom:0.25rem">Correo de Talento Humano</div>
+            <div class="config-card-desc" style="margin-bottom:1rem">
+              Los colaboradores enviarán su paz y salvo finalizado a este correo.
+            </div>
+            <div class="form-group">
+              <label class="form-label">Email</label>
+              <input type="email" id="sa-email-th" class="form-input" placeholder="talento.humano@colegio.edu.co">
+            </div>
+            <button class="btn btn-primary" onclick="guardarEmailTH()">💾 Guardar correo TH</button>
+          </div>
+
+          <!-- Correos de Admins -->
+          <div class="config-card" style="max-width:720px">
+            <div class="config-card-title" style="margin-bottom:0.25rem">Correos de notificación de Administradores</div>
+            <div class="config-card-desc" style="margin-bottom:1rem">
+              Cada Admin recibirá notificaciones en su correo cuando se activen paz y salvos en su área.
+              Puedes configurar o actualizar el correo de cada Admin directamente aquí.
+            </div>
+            <div id="sa-admins-emails-container">
+              <div class="loading-state"><div class="loading-spinner"></div> Cargando admins...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Contraseña SA -->
+        <div class="tab-content" id="sa-tab-password">
+          <div class="config-card" style="max-width:420px">
+            <div class="config-card-title" style="margin-bottom:1rem">Cambiar contraseña</div>
+            <div class="form-group">
+              <label class="form-label">Contraseña actual</label>
+              <input type="password" id="sa-pw-actual" class="form-input" placeholder="Tu contraseña actual">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Nueva contraseña</label>
+              <input type="password" id="sa-pw-nueva" class="form-input" placeholder="Mínimo 6 caracteres">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Confirmar nueva contraseña</label>
+              <input type="password" id="sa-pw-confirmar" class="form-input" placeholder="Repite la nueva contraseña">
+            </div>
+            <button class="btn btn-primary" onclick="cambiarPasswordSA()">🔒 Cambiar contraseña</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: SA - VISTA GLOBAL ──────────────────── -->
+      <div class="content-panel" id="panel-sa-global">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Vista Global</h2>
+            <p>Estado completo del proceso — Solo lectura</p>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadSAGlobal()">↻ Actualizar</button>
+        </div>
+        <div id="sa-global-content">
+          <div class="loading-state"><div class="loading-spinner"></div> Cargando...</div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: LOGS ────────────────────────────────── -->
+      <div class="content-panel" id="panel-sa-logs">
+        <div class="page-header">
+          <div class="page-header-left">
+            <h2>Auditoría</h2>
+            <p>Registro de acciones del sistema (últimas 200)</p>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="loadLogs()">↻ Actualizar</button>
+        </div>
+        <div id="sa-logs-content" class="table-container" style="padding: 0.5rem 0;">
+          <div class="loading-state"><div class="loading-spinner"></div> Cargando...</div>
+        </div>
+      </div>
+
+      <!-- ── PANEL: VERIFICACIÓN (Solo SuperAdmin en app) ── -->
+      <div class="content-panel" id="panel-verificacion">
+        <div class="verify-container">
+          <div class="verify-card">
+            <h2>Verificar Paz y Salvo</h2>
+            <p>Ingresa el código de verificación del documento para validar su autenticidad</p>
+            <div class="form-group" style="text-align:left">
+              <label class="form-label">Código de verificación</label>
+              <input type="text" id="verify-code-input" class="form-input"
+                placeholder="Ej: PSG-1234-ABCDE"
+                style="font-family:var(--font-mono); letter-spacing:0.08em; text-transform:uppercase"
+                oninput="this.value = this.value.toUpperCase()">
+            </div>
+            <button class="btn btn-primary" style="width:100%" onclick="verificarCodigo()">🔍 Verificar código</button>
+            <div id="verify-result" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     MODALES
+═══════════════════════════════════════════════════════ -->
+
+<!-- Modal Gestionar Colaborador (Admin área) — individual -->
+<div class="modal-overlay" id="modal-gestionar">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 class="modal-title">Gestionar colaborador</h3>
+      <button class="modal-close" onclick="cerrarModal('modal-gestionar')">✕</button>
+    </div>
+    <div id="modal-gestionar-content"></div>
+    <div class="form-group" id="modal-obs-group" style="display:none">
+      <label class="form-label">Observaciones <span style="color:var(--red)">*</span></label>
+      <textarea id="modal-observaciones" class="form-input form-textarea" placeholder="Motivo del rechazo (obligatorio)"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-gestionar')">Cerrar</button>
+      <button class="btn btn-danger" id="btn-rechazar-modal" onclick="ejecutarRechazar()">Rechazar</button>
+      <button class="btn btn-success" id="btn-aprobar-modal" onclick="ejecutarAprobar()">Aprobar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Crear/Editar Colaborador (SuperAdmin) -->
+<div class="modal-overlay" id="modal-colaborador">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modal-colab-title">Nuevo colaborador</h3>
+      <button class="modal-close" onclick="cerrarModal('modal-colaborador')">✕</button>
+    </div>
+    <div class="form-grid-2">
+      <div class="form-group">
+        <label class="form-label">Nombre completo <span style="color:var(--red)">*</span></label>
+        <input type="text" id="colab-nombre" class="form-input" placeholder="Nombre completo">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Cédula <span style="color:var(--red)">*</span></label>
+        <input type="text" id="colab-cedula" class="form-input" placeholder="Número de cédula">
+      </div>
+    </div>
+    <div id="colab-acceso-group">
+      <div style="font-size:12px; color:var(--text2); margin-bottom:8px; padding:8px 0 4px; border-top:1px solid var(--border)">
+        Cuenta de acceso del colaborador
+      </div>
+      <div class="form-grid-2">
+        <div class="form-group">
+          <label class="form-label">Usuario <span style="color:var(--red)">*</span></label>
+          <input type="text" id="colab-username" class="form-input" placeholder="Ej: cedula o nombre.apellido">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Contraseña <span style="color:var(--red)">*</span></label>
+          <input type="password" id="colab-password" class="form-input" placeholder="Mínimo 6 caracteres">
+        </div>
+      </div>
+    </div>
+    <div class="form-group" id="colab-activo-group" style="display:none">
+      <label class="form-label">Estado</label>
+      <select id="colab-activo" class="form-input">
+        <option value="true">Activo</option>
+        <option value="false">Inactivo</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer">
+        <input type="checkbox" id="colab-requiere-ps" checked style="width:auto">
+        Requiere paz y salvo
+      </label>
+    </div>
+    <input type="hidden" id="colab-edit-id">
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-colaborador')">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarColaborador()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Carga Masiva (SuperAdmin) -->
+<div class="modal-overlay" id="modal-carga-masiva">
+  <div class="modal modal-xl">
+    <div class="modal-header">
+      <h3 class="modal-title">📤 Carga masiva de colaboradores</h3>
+      <button class="modal-close" onclick="cerrarModal('modal-carga-masiva')">✕</button>
+    </div>
+
+    <div class="alert-banner info" style="margin-bottom:1rem">
+      <span>ℹ️</span>
+      <div>
+        Descarga la plantilla Excel, llénala y súbela. También puedes subir un <strong>.xlsx</strong> o <strong>.csv</strong> propio.<br>
+        Columnas obligatorias: <code style="font-family:var(--font-mono); font-size:0.78rem">NOMBRE, CEDULA</code> —
+        Opcionales: <code style="font-family:var(--font-mono); font-size:0.78rem">USERNAME, PASSWORD, REQUIERE_PAZ_SALVO</code><br>
+        Si omites <em>USERNAME</em> o <em>PASSWORD</em> se usa la cédula como valor por defecto.
+      </div>
+    </div>
+
+    <div class="panel-tabs" style="margin-bottom:1rem">
+      <button class="panel-tab active" onclick="switchMasivaTab('archivo', this)">📂 Subir archivo</button>
+      <button class="panel-tab" onclick="switchMasivaTab('texto', this)">✏️ Pegar datos</button>
+      <button class="panel-tab" onclick="descargarPlantilla()">⬇️ Plantilla Excel</button>
+    </div>
+
+    <!-- Tab Archivo -->
+    <div class="tab-content active" id="masiva-tab-archivo">
+      <div class="upload-zone" id="upload-zone"
+        ondragover="event.preventDefault(); this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleFileDrop(event)"
+        onclick="document.getElementById('excel-file-input').click()">
+        <div class="icon">📊</div>
+        <p>Arrastra tu archivo aquí o haz clic para seleccionar</p>
+        <small>Formatos aceptados: <strong>.xlsx</strong>, .xls, .csv — máximo 200 filas</small>
+      </div>
+      <input type="file" id="excel-file-input" accept=".xlsx,.xls,.csv,.txt" style="display:none" onchange="handleFileSelect(event)">
+    </div>
+
+    <!-- Tab Texto -->
+    <div class="tab-content" id="masiva-tab-texto">
+      <div class="form-group">
+        <label class="form-label">Pega los datos (CSV con o sin encabezado, separador coma o punto y coma)</label>
+        <textarea id="masiva-texto" class="form-input form-textarea" style="min-height:160px; font-family:var(--font-mono); font-size:0.8rem"
+          placeholder="NOMBRE;CEDULA;USERNAME;PASSWORD;REQUIERE_PAZ_SALVO&#10;María García;12345678;maria.garcia;Pass123#;SI&#10;Juan Pérez;87654321;;;NO"></textarea>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="procesarTextoMasivo()">Previsualizar datos</button>
+    </div>
+
+    <div id="masiva-preview" style="display:none"></div>
+    <div id="masiva-result" style="display:none"></div>
+
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-carga-masiva')">Cerrar</button>
+      <button class="btn btn-primary" id="btn-ejecutar-masiva" style="display:none" onclick="ejecutarCargaMasiva()">
+        ✅ Importar colaboradores
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Crear/Editar Usuario (SuperAdmin) -->
+<div class="modal-overlay" id="modal-usuario">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modal-user-title">Nuevo usuario</h3>
+      <button class="modal-close" onclick="cerrarModal('modal-usuario')">✕</button>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Usuario <span style="color:var(--red)">*</span></label>
+      <input type="text" id="user-username" class="form-input" placeholder="nombre.usuario">
+    </div>
+    <div class="form-group" id="user-pass-group">
+      <label class="form-label">Contraseña <span style="color:var(--red)" id="user-pass-req">*</span></label>
+      <input type="password" id="user-password" class="form-input" placeholder="Mínimo 6 caracteres">
+      <div id="user-pass-hint" style="font-size:0.75rem; color:var(--text2); margin-top:4px; display:none">
+        Dejar vacío para no cambiar la contraseña
+      </div>
+    </div>
+    <div class="form-group" id="user-rol-group">
+      <label class="form-label">Rol <span style="color:var(--red)">*</span></label>
+      <select id="user-rol" class="form-input" onchange="toggleAreaField()">
+        <option value="">Seleccionar...</option>
+        <option value="ADMIN">Admin por área</option>
+        <option value="COLABORADOR">Colaborador</option>
+      </select>
+    </div>
+    <div class="form-group" id="user-area-group" style="display:none">
+      <label class="form-label">Área <span style="color:var(--red)">*</span></label>
+      <select id="user-area" class="form-input">
+        <option value="">Seleccionar área...</option>
+      </select>
+    </div>
+    <div class="form-group" id="user-activo-group" style="display:none">
+      <label class="form-label">Estado</label>
+      <select id="user-activo" class="form-input">
+        <option value="true">Activo</option>
+        <option value="false">Inactivo</option>
+      </select>
+    </div>
+    <div class="form-group" id="user-email-group" style="display:none">
+      <label class="form-label">Correo de notificación (Admin)</label>
+      <input type="email" id="user-email" class="form-input" placeholder="admin@colegio.edu.co">
+      <div style="font-size:0.75rem; color:var(--text2); margin-top:4px">
+        Este correo recibirá alertas cuando el Super Admin active paz y salvos.
+      </div>
+    </div>
+    <input type="hidden" id="user-edit-id">
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-usuario')">Cancelar</button>
+      <button class="btn btn-primary" onclick="guardarUsuario()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Documento -->
+<div class="modal-overlay" id="modal-documento">
+  <div class="modal modal-lg">
+    <div class="modal-header">
+      <h3 class="modal-title">Paz y Salvo</h3>
+      <button class="modal-close" onclick="cerrarModal('modal-documento')">✕</button>
+    </div>
+    <div id="modal-documento-content"></div>
+    <div class="modal-footer no-print">
+      <button class="btn btn-ghost" onclick="cerrarModal('modal-documento')">Cerrar</button>
+      <button class="btn btn-ghost" onclick="printDocumento()">🖨️ Imprimir</button>
+      <button class="btn btn-primary" onclick="imprimirDocumento()">💾 Guardar como PDF</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Dialog -->
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-box">
+    <h3 id="confirm-title">Confirmar acción</h3>
+    <p id="confirm-msg">¿Estás seguro de realizar esta acción?</p>
+    <div class="confirm-actions">
+      <button class="btn btn-ghost" onclick="resolveConfirm(false)">Cancelar</button>
+      <button class="btn btn-primary" id="confirm-ok-btn" onclick="resolveConfirm(true)">Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast-container"></div>
+
+<? try { ?><?!= include('app') ?><? } catch(e) { ?><script src="app.js"></script><? } ?>
+</body>
+</html>
