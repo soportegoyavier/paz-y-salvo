@@ -27,23 +27,14 @@
         <p>Colegio Campestre Goyavier</p>
       </div>
 
-      <div class="login-tabs">
-        <button class="login-tab active" onclick="setLoginTab('admin')" id="tab-admin">Administrativo</button>
-        <button class="login-tab" onclick="setLoginTab('colaborador')" id="tab-colab">Colaborador</button>
-      </div>
-
       <div>
         <div class="form-group">
           <label class="form-label">Usuario</label>
           <input type="text" id="login-username" class="form-input" placeholder="Ingresa tu usuario" autocomplete="username">
         </div>
         <div class="form-group">
-          <label class="form-label" id="login-pass-label">Contraseña</label>
+          <label class="form-label">Contraseña</label>
           <input type="password" id="login-password" class="form-input" placeholder="Ingresa tu contraseña" autocomplete="current-password">
-        </div>
-        <div class="form-group login-cedula-group" id="login-cedula-group">
-          <label class="form-label">Cédula (para verificar tu estado)</label>
-          <input type="text" id="login-cedula" class="form-input" placeholder="Número de cédula">
         </div>
         <button class="btn btn-primary" style="width:100%; margin-top:0.5rem" onclick="handleLogin()" id="login-btn">
           Ingresar
@@ -445,6 +436,32 @@
       </select>
     </div>
     <div class="form-group">
+      <label class="form-label">Tipo de colaborador <span style="color:var(--red)">*</span></label>
+      <select id="colab-tipo" class="form-input" onchange="onChangeTipoColab(this.value)">
+        <option value="">— Seleccionar tipo —</option>
+        <option value="DOCENTE">Docente</option>
+        <option value="ADMINISTRATIVO">Administrativo</option>
+        <option value="SERVICIOS">Personal de Servicios</option>
+      </select>
+    </div>
+    <div id="colab-nivel-group" class="form-group" style="display:none">
+      <label class="form-label">Nivel educativo</label>
+      <select id="colab-nivel" class="form-input">
+        <option value="">— Seleccionar nivel —</option>
+        <option value="PREESCOLAR">Preescolar</option>
+        <option value="PRIMARIA">Primaria</option>
+        <option value="BACHILLERATO">Bachillerato / Secundaria</option>
+      </select>
+      <div style="font-size:0.75rem; color:var(--text2); margin-top:4px">Determina el coordinador académico que debe firmar.</div>
+    </div>
+    <div id="colab-jefe-group" class="form-group" style="display:none">
+      <label class="form-label" id="colab-jefe-label">Jefe / Área</label>
+      <select id="colab-areas-requeridas" class="form-input">
+        <option value="">— Ninguno —</option>
+      </select>
+      <div style="font-size:0.75rem; color:var(--text2); margin-top:4px" id="colab-jefe-hint"></div>
+    </div>
+    <div class="form-group">
       <label class="form-label" style="display:flex; align-items:center; gap:8px; cursor:pointer">
         <input type="checkbox" id="colab-requiere-ps" checked style="width:auto">
         Requiere paz y salvo
@@ -545,10 +562,12 @@
       </select>
     </div>
     <div class="form-group" id="user-area-group" style="display:none">
-      <label class="form-label">Área <span style="color:var(--red)">*</span></label>
-      <select id="user-area" class="form-input">
-        <option value="">Seleccionar área...</option>
+      <label class="form-label">Áreas asignadas <span style="color:var(--red)">*</span></label>
+      <select id="user-area" class="form-input" multiple size="6" style="height:auto; padding:4px">
       </select>
+      <div style="font-size:0.75rem; color:var(--text2); margin-top:4px">
+        Mantén <kbd style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:1px 4px;font-size:0.72rem">Ctrl</kbd> (o <kbd style="background:var(--bg3);border:1px solid var(--border);border-radius:3px;padding:1px 4px;font-size:0.72rem">⌘</kbd> en Mac) para seleccionar varias áreas a la vez.
+      </div>
     </div>
     <div class="form-group" id="user-activo-group" style="display:none">
       <label class="form-label">Estado</label>
@@ -562,6 +581,13 @@
       <input type="email" id="user-email" class="form-input" placeholder="admin@colegio.edu.co">
       <div style="font-size:0.75rem; color:var(--text2); margin-top:4px">
         Este correo recibirá alertas cuando el Super Admin active paz y salvos.
+      </div>
+    </div>
+    <div class="form-group" id="user-cedula-group" style="display:none">
+      <label class="form-label">Cédula del administrador</label>
+      <input type="text" id="user-cedula" class="form-input" placeholder="Número de cédula" inputmode="numeric">
+      <div style="font-size:0.75rem; color:var(--text2); margin-top:4px">
+        Vincula esta cuenta admin con su propio registro de colaborador. Sus áreas aparecerán como <strong>OMITIDO</strong> en su paz y salvo.
       </div>
     </div>
     <input type="hidden" id="user-edit-id">

@@ -203,7 +203,6 @@ let STATE = {
   currentAreaId: null,
   areaColabs: {},
   cedulaPropia: null,
-  loginTab: "admin",    // pestaña usada al ingresar: "admin" | "colaborador"
   areaColaboradores: [], areaFilter: "todos",
   areasDisponibles: [],
   colabEditId: null, userEditId: null, gestionarColabId: null,
@@ -278,19 +277,9 @@ function switchMasivaTab(tabId, btn) {
 }
 
 // ── LOGIN ────────────────────────────────────────────────
-let loginTab = "admin";
-
-function setLoginTab(tab) {
-  loginTab = tab;
-  document.getElementById("tab-admin").classList.toggle("active", tab === "admin");
-  document.getElementById("tab-colab").classList.toggle("active", tab === "colaborador");
-  document.getElementById("login-cedula-group").classList.toggle("visible", tab === "colaborador");
-}
-
 async function handleLogin() {
   const username = document.getElementById("login-username").value.trim();
   const password = document.getElementById("login-password").value;
-  const cedula   = document.getElementById("login-cedula").value.trim();
   const errEl    = document.getElementById("login-error");
   const btn      = document.getElementById("login-btn");
 
@@ -300,7 +289,7 @@ async function handleLogin() {
   btn.disabled = true;
   btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px"></div> Ingresando...';
 
-  const r = await api("login", { username, password, modoLogin: loginTab });
+  const r = await api("login", { username, password });
 
   if (!r.ok) {
     btn.disabled = false;
@@ -317,8 +306,7 @@ async function handleLogin() {
   STATE.areaIds = r.areaIds || (r.areaId ? [r.areaId] : []);
   STATE.areaNombres = r.areaNombres || (r.areaId ? { [r.areaId]: r.areaNombre } : {});
   STATE.currentAreaId = STATE.areaIds[0] || null;
-  STATE.loginTab = loginTab;
-  if (cedula) STATE.cedulaPropia = cedula;
+  if (r.cedula) STATE.cedulaPropia = r.cedula;
 
   const areasR = await api("get_areas");
   if (areasR.ok) STATE.areasDisponibles = areasR.areas;
@@ -331,7 +319,7 @@ function handleLogout() {
   _limpiarTokenGmail();
   STATE = { token:null, rol:null, username:null, areaId:null, areaNombre:null,
             areaIds:[], areaNombres:{}, currentAreaId:null, areaColabs:{},
-            cedulaPropia:null, loginTab:"admin",
+            cedulaPropia:null,
             areaColaboradores:[], areaFilter:"todos", areasDisponibles:[],
             colabEditId:null, userEditId:null, gestionarColabId:null,
             confirmResolve:null, saColaboradores:[], saSelectedIds: new Set(),
@@ -376,7 +364,7 @@ function handleLoginGoogle() {
         }
         try {
           btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></div> Verificando...';
-          const r = await api("login_google", { accessToken: tokenResp.access_token, modoLogin: loginTab });
+          const r = await api("login_google", { accessToken: tokenResp.access_token });
           if (!r.ok) {
             errEl.textContent = r.error || "Error al iniciar sesión con Google";
             errEl.classList.add("visible");
@@ -389,7 +377,7 @@ function handleLoginGoogle() {
           STATE.areaIds = r.areaIds || (r.areaId ? [r.areaId] : []);
           STATE.areaNombres = r.areaNombres || (r.areaId ? { [r.areaId]: r.areaNombre } : {});
           STATE.currentAreaId = STATE.areaIds[0] || null;
-          STATE.loginTab = loginTab;
+          if (r.cedula) STATE.cedulaPropia = r.cedula;
           const areasR = await api("get_areas");
           if (areasR.ok) STATE.areasDisponibles = areasR.areas;
           iniciarApp();
@@ -410,10 +398,7 @@ function handleLoginGoogle() {
 }
 
 // ── INICIO APP ───────────────────────────────────────────
-// Rol que determina el MENÚ y la vista: si entró por pestaña "colaborador",
-// solo ve paz y salvo propio aunque su ROL real sea ADMIN o SUPERADMIN.
 function rolVista() {
-  if (STATE.loginTab === "colaborador") return "COLABORADOR";
   if (STATE.rol === "SUPERADMIN" && STATE.areaIds.length > 0) return "ADMIN_COMBINED";
   return STATE.rol;
 }
@@ -428,8 +413,6 @@ function iniciarApp() {
   const rv = rolVista();
   if (rv === "ADMIN_COMBINED") {
     badge.textContent = "Administrador";
-  } else if (STATE.loginTab === "colaborador" && STATE.rol !== "COLABORADOR") {
-    badge.textContent = "Colaborador";
   } else if (rv === "SUPERADMIN") {
     badge.textContent = "Super Admin";
   } else if (rv === "ADMIN") {
@@ -591,13 +574,16 @@ async function loadMiEstado() {
               <div class="area-dot ${area.estado.toLowerCase()}"></div>
               <div>
                 <div style="font-weight:500">${area.areaNombre}</div>
+                ${area.estado === "OMITIDO"
+                  ? `<div style="font-size:0.75rem; color:#818cf8; margin-top:2px">Área propia — no requiere aprobación externa</div>`
+                  : ""}
                 ${area.estado === "PENDIENTE" && area.adminUsername
                   ? `<div style="font-size:0.75rem; color:var(--text2); margin-top:2px">⏳ Pendiente con: <strong>${area.adminUsername}</strong></div>`
                   : ""}
                 ${area.estado === "APROBADO" && area.aprobadoPor
                   ? `<div style="font-size:0.75rem; color:var(--green); margin-top:2px">✓ Aprobado por: ${area.aprobadoPor}</div>`
                   : ""}
-                ${area.observaciones ? `<div style="font-size:0.78rem; color:var(--red); margin-top:2px">⚠ ${area.observaciones}</div>` : ""}
+                ${area.estado !== "OMITIDO" && area.observaciones ? `<div style="font-size:0.78rem; color:var(--red); margin-top:2px">⚠ ${area.observaciones}</div>` : ""}
               </div>
             </div>
             <span class="badge badge-${area.estado.toLowerCase()}">${area.estado}</span>
@@ -727,7 +713,7 @@ async function loadPanelEnviarPazSalvo() {
 }
 
 async function enviarSolicitudTH() {
-  const cedula = window._thCedula || document.getElementById("login-cedula").value.trim() || STATE.username;
+  const cedula = window._thCedula || STATE.cedulaPropia || STATE.username;
   const ok = await confirm(
     "Confirmar envío",
     "¿Enviar tu paz y salvo finalizado al área de Talento Humano? Esta acción generará un correo oficial.",
@@ -934,10 +920,11 @@ async function abrirGestionar(colabId) {
   if (!box) return;
   if (!r.ok) { box.innerHTML = `<div style="font-size:0.8rem; color:var(--text3)">${r.error}</div>`; return; }
 
-  const pendientes = r.estadoPorArea.filter(a => a.estado !== "APROBADO");
+  const areasRequeridas = r.estadoPorArea.filter(a => a.estado !== "OMITIDO");
+  const pendientes = areasRequeridas.filter(a => a.estado !== "APROBADO");
   box.innerHTML = `
     <div style="font-size:0.8rem; font-weight:600; color:var(--text2); margin-bottom:0.5rem">
-      Estado general · ${r.estadoPorArea.filter(a => a.estado === "APROBADO").length}/${r.estadoPorArea.length} áreas aprobadas
+      Estado general · ${areasRequeridas.filter(a => a.estado === "APROBADO").length}/${areasRequeridas.length} áreas aprobadas
     </div>
     <div style="display:flex; flex-direction:column; gap:4px; max-height:180px; overflow-y:auto">
       ${r.estadoPorArea.map(a => `
@@ -1042,15 +1029,21 @@ function renderSAColaboradoresTable() {
           <input type="checkbox" class="cb-custom" ${allSelected ? "checked" : ""}
             onchange="toggleSASelectAll(this.checked)">
         </th>
-        <th>Nombre</th><th>Cédula</th><th>Estado</th><th>Paz y Salvo</th><th>Activo</th><th>Acciones</th>
+        <th>Nombre</th><th>Cédula</th><th>Área</th><th>Estado</th><th>Paz y Salvo</th><th>Activo</th><th>Acciones</th>
       </tr></thead>
       <tbody>
-        ${lista.map(c => `
+        ${lista.map(c => {
+          const escapedNombre    = c.nombre.replace(/'/g,"\\'");
+          const escapedAreasReq  = (c.areasRequeridas || "").replace(/'/g,"\\'");
+          const tipoLabel = { DOCENTE: "Docente", ADMINISTRATIVO: "Administrativo", SERVICIOS: "Servicios" }[c.tipoColaborador] || "—";
+          const tipoColor = { DOCENTE: "var(--blue)", ADMINISTRATIVO: "var(--green)", SERVICIOS: "var(--yellow)" }[c.tipoColaborador] || "var(--text2)";
+          return `
           <tr class="${STATE.saSelectedIds.has(c.id) ? "row-selected" : ""}">
             <td><input type="checkbox" class="cb-custom" ${STATE.saSelectedIds.has(c.id) ? "checked" : ""}
               onchange="toggleSASelect('${c.id}', this.checked)"></td>
             <td>${c.nombre}</td>
             <td><span style="font-family:var(--font-mono); font-size:0.82rem">${c.cedula}</span></td>
+            <td style="font-size:0.8rem; color:${tipoColor}">${tipoLabel}</td>
             <td><span class="badge badge-${c.estadoGeneral === "COMPLETO" ? "aprobado" : "pendiente"}">${c.estadoGeneral}</span></td>
             <td>
               <label class="switch-wrap">
@@ -1063,11 +1056,11 @@ function renderSAColaboradoresTable() {
             </td>
             <td><span class="badge ${c.activo ? "badge-aprobado" : "badge-inactivo"}">${c.activo ? "Activo" : "Inactivo"}</span></td>
             <td style="display:flex; gap:6px; flex-wrap:wrap">
-              <button class="btn btn-ghost btn-sm" onclick="abrirModalEditarColaborador('${c.id}','${c.nombre.replace(/'/g,"\\'")}','${c.cedula}',${c.activo})">Editar</button>
+              <button class="btn btn-ghost btn-sm" onclick="abrirModalEditarColaborador('${c.id}','${escapedNombre}','${c.cedula}',${c.activo},'${c.tipoColaborador || ""}','${c.nivelEducativo || ""}','${escapedAreasReq}')">Editar</button>
               ${c.tieneDocumento ? `<button class="btn btn-success btn-sm" onclick="descargarDocumento('${c.id}')">📄 PS</button>` : ""}
             </td>
-          </tr>
-        `).join("")}
+          </tr>`;
+        }).join("")}
       </tbody>
     </table>
   `;
@@ -1113,17 +1106,67 @@ async function togglePazSalvoMasivo(valor) {
   } else toast(r.error, "error");
 }
 
+// tipo: "DOCENTE" → solo áreas DEPARTAMENTAL | "ADMINISTRATIVO" → todas | "" → oculto
+function populateColabAreasSelect(selectedId = "", tipo = "") {
+  const sel = document.getElementById("colab-areas-requeridas");
+  const selected = String(selectedId).trim();
+  const todas = STATE.areasDisponibles || [];
+
+  let opciones;
+  if (tipo === "DOCENTE") {
+    const depto = todas.filter(a => a.tipo === "DEPARTAMENTAL");
+    opciones = depto.length > 0 ? depto : todas; // fallback antes de migración
+  } else {
+    opciones = todas; // para ADMINISTRATIVO mostrar todas las áreas disponibles
+  }
+
+  const emptyLabel = tipo === "DOCENTE"
+    ? "— Sin área académica —"
+    : "— Sin jefe asignado —";
+
+  sel.innerHTML = `<option value="">${emptyLabel}</option>` +
+    opciones.map(a =>
+      `<option value="${a.id}" ${String(a.id) === selected ? "selected" : ""}>${a.nombre}</option>`
+  ).join("");
+}
+
+function onChangeTipoColab(tipo) {
+  const nivelGroup = document.getElementById("colab-nivel-group");
+  const jefeGroup  = document.getElementById("colab-jefe-group");
+  const jefeLabel  = document.getElementById("colab-jefe-label");
+  const jefeHint   = document.getElementById("colab-jefe-hint");
+
+  nivelGroup.style.display = tipo === "DOCENTE" ? "block" : "none";
+  jefeGroup.style.display  = (tipo === "DOCENTE" || tipo === "ADMINISTRATIVO") ? "block" : "none";
+
+  if (tipo === "DOCENTE") {
+    jefeLabel.textContent = "Área académica";
+    jefeHint.textContent  = "Jefe de área responsable de la firma (Matemáticas, Inglés, etc.).";
+  } else if (tipo === "ADMINISTRATIVO") {
+    jefeLabel.textContent = "Jefe inmediato / Supervisor";
+    jefeHint.textContent  = "Supervisor directo: Andrea (Talento Humano), David (Jefe de Área), Doña Sonia (Coord. Administrativa), etc.";
+  }
+
+  // Refrescar opciones del dropdown (sin preservar selección al cambiar de tipo)
+  populateColabAreasSelect("", tipo);
+}
+
 function abrirModalCrearColaborador() {
   STATE.colabEditId = null;
-  document.getElementById("modal-colab-title").textContent = "Nuevo colaborador";
-  document.getElementById("colab-nombre").value   = "";
-  document.getElementById("colab-cedula").value   = "";
-  document.getElementById("colab-username").value = "";
-  document.getElementById("colab-password").value = "";
-  document.getElementById("colab-requiere-ps").checked = true;
-  document.getElementById("colab-activo-group").style.display  = "none";
-  document.getElementById("colab-acceso-group").style.display  = "block";
-  document.getElementById("colab-edit-id").value = "";
+  document.getElementById("modal-colab-title").textContent    = "Nuevo colaborador";
+  document.getElementById("colab-nombre").value               = "";
+  document.getElementById("colab-cedula").value               = "";
+  document.getElementById("colab-username").value             = "";
+  document.getElementById("colab-password").value             = "";
+  document.getElementById("colab-requiere-ps").checked        = true;
+  document.getElementById("colab-tipo").value                 = "";
+  document.getElementById("colab-nivel").value                = "";
+  document.getElementById("colab-activo-group").style.display = "none";
+  document.getElementById("colab-acceso-group").style.display = "block";
+  document.getElementById("colab-nivel-group").style.display  = "none";
+  document.getElementById("colab-jefe-group").style.display   = "none";
+  document.getElementById("colab-edit-id").value              = "";
+  populateColabAreasSelect("", "");
   document.getElementById("colab-cedula").oninput = function() {
     if (!document.getElementById("colab-username").value)
       document.getElementById("colab-username").value = this.value;
@@ -1131,35 +1174,54 @@ function abrirModalCrearColaborador() {
   abrirModal("modal-colaborador");
 }
 
-function abrirModalEditarColaborador(id, nombre, cedula, activo) {
+function abrirModalEditarColaborador(id, nombre, cedula, activo, tipoColaborador = "", nivelEducativo = "", areasRequeridas = "") {
   STATE.colabEditId = id;
-  document.getElementById("modal-colab-title").textContent = "Editar colaborador";
-  document.getElementById("colab-nombre").value  = nombre;
-  document.getElementById("colab-cedula").value  = cedula;
+  document.getElementById("modal-colab-title").textContent    = "Editar colaborador";
+  document.getElementById("colab-nombre").value               = nombre;
+  document.getElementById("colab-cedula").value               = cedula;
+  document.getElementById("colab-tipo").value                 = tipoColaborador || "";
+  document.getElementById("colab-nivel").value                = nivelEducativo || "";
   document.getElementById("colab-activo-group").style.display = "block";
-  document.getElementById("colab-activo").value  = activo ? "true" : "false";
+  document.getElementById("colab-activo").value               = activo ? "true" : "false";
   document.getElementById("colab-acceso-group").style.display = "none";
-  document.getElementById("colab-edit-id").value = id;
-  document.getElementById("colab-cedula").oninput = null;
+  document.getElementById("colab-nivel-group").style.display  = tipoColaborador === "DOCENTE" ? "block" : "none";
+  document.getElementById("colab-jefe-group").style.display   = (tipoColaborador === "DOCENTE" || tipoColaborador === "ADMINISTRATIVO") ? "block" : "none";
+  document.getElementById("colab-edit-id").value              = id;
+  document.getElementById("colab-cedula").oninput             = null;
+  // Actualizar labels sin resetear selección
+  const jefeLabel = document.getElementById("colab-jefe-label");
+  const jefeHint  = document.getElementById("colab-jefe-hint");
+  if (tipoColaborador === "DOCENTE") {
+    if (jefeLabel) jefeLabel.textContent = "Área académica";
+    if (jefeHint)  jefeHint.textContent  = "Jefe de área responsable de la firma (Matemáticas, Inglés, etc.).";
+  } else if (tipoColaborador === "ADMINISTRATIVO") {
+    if (jefeLabel) jefeLabel.textContent = "Jefe inmediato / Supervisor";
+    if (jefeHint)  jefeHint.textContent  = "Supervisor directo: Andrea (Talento Humano), David (Jefe de Área), Doña Sonia (Coord. Administrativa), etc.";
+  }
+  populateColabAreasSelect(areasRequeridas, tipoColaborador);
   abrirModal("modal-colaborador");
 }
 
 async function guardarColaborador() {
-  const nombre   = document.getElementById("colab-nombre").value.trim();
-  const cedula   = document.getElementById("colab-cedula").value.trim();
-  const requiere = document.getElementById("colab-requiere-ps").checked;
-  const id       = document.getElementById("colab-edit-id").value;
+  const nombre    = document.getElementById("colab-nombre").value.trim();
+  const cedula    = document.getElementById("colab-cedula").value.trim();
+  const requiere  = document.getElementById("colab-requiere-ps").checked;
+  const id        = document.getElementById("colab-edit-id").value;
+  const tipoColaborador = document.getElementById("colab-tipo").value;
+  const nivelEducativo  = document.getElementById("colab-nivel").value;
+  const areasRequeridas = document.getElementById("colab-areas-requeridas").value.trim();
 
   if (!nombre || !cedula) { toast("Nombre y cédula son obligatorios", "error"); return; }
+  if (!tipoColaborador)   { toast("Selecciona el tipo de colaborador", "error"); return; }
 
   if (!id) {
     const username = document.getElementById("colab-username").value.trim();
     const password = document.getElementById("colab-password").value;
     if (!username) { toast("El usuario de acceso es obligatorio", "error"); return; }
     if (!password || password.length < 6) { toast("La contraseña debe tener al menos 6 caracteres", "error"); return; }
-    const ok = await confirm("Confirmar", `¿Crear colaborador "${nombre}" con usuario "${username}"?`, "Crear");
+    const ok = await confirm("Confirmar", `¿Crear colaborador "${nombre}" como ${tipoColaborador.toLowerCase()}?`, "Crear");
     if (!ok) return;
-    const rColab = await api("crear_colaborador", { nombre, cedula, requierePazSalvo: requiere });
+    const rColab = await api("crear_colaborador", { nombre, cedula, requierePazSalvo: requiere, tipoColaborador, nivelEducativo, areasRequeridas });
     if (!rColab.ok) { toast(rColab.error, "error"); return; }
     const rUser  = await api("crear_usuario", { username, password, rol: "COLABORADOR", areaId: "" });
     if (!rUser.ok) toast(`Colaborador creado pero error al crear usuario: ${rUser.error}`, "error");
@@ -1172,7 +1234,7 @@ async function guardarColaborador() {
   const ok = await confirm("Confirmar", "¿Guardar cambios del colaborador?", "Guardar");
   if (!ok) return;
   const activo = document.getElementById("colab-activo").value === "true";
-  const r = await api("editar_colaborador", { id, nombre, cedula, activo });
+  const r = await api("editar_colaborador", { id, nombre, cedula, activo, tipoColaborador, nivelEducativo, areasRequeridas });
   if (r.ok) { toast(r.mensaje, "success"); cerrarModal("modal-colaborador"); loadSAColaboradores(); }
   else toast(r.error, "error");
 }
@@ -1439,26 +1501,31 @@ async function loadSAUsuarios() {
   container.innerHTML = `
     <table class="table">
       <thead><tr>
-        <th>Usuario</th><th>Rol</th><th>Área</th><th>Correo</th><th>Estado</th><th>Acciones</th>
+        <th>Usuario</th><th>Rol</th><th>Área</th><th>Correo</th><th>Cédula</th><th>Estado</th><th>Acciones</th>
       </tr></thead>
       <tbody>
-        ${r.usuarios.map(u => `
-          <tr>
+        ${r.usuarios.map(u => {
+          const areasLabel = (u.areaNombres && u.areaNombres.length) ? u.areaNombres.join(", ") : (u.areaNombre || "—");
+          const escapedArea  = (u.areaId || "").replace(/'/g, "\\'");
+          const escapedEmail = (u.email || "").replace(/'/g, "\\'");
+          const escapedCed   = (u.cedula || "").replace(/'/g, "\\'");
+          return `<tr>
             <td style="font-weight:500">${u.username}</td>
             <td><span class="badge ${u.rol==="SUPERADMIN" ? "" : u.rol==="ADMIN" ? "badge-aprobado" : "badge-pendiente"}"
               style="${u.rol==="SUPERADMIN" ? "background:rgba(139,92,246,0.15);color:#c4b5fd" : ""}">
               ${u.rol}
             </span></td>
-            <td>${u.areaNombre || "—"}</td>
+            <td style="font-size:0.85rem">${areasLabel}</td>
             <td style="font-size:0.8rem; color:var(--text2)">${u.email || "—"}</td>
+            <td style="font-size:0.8rem; color:var(--text2)">${u.cedula || "—"}</td>
             <td><span class="badge ${u.activo ? "badge-aprobado" : "badge-inactivo"}">${u.activo ? "Activo" : "Inactivo"}</span></td>
             <td>
               ${u.rol !== "SUPERADMIN"
-                ? `<button class="btn btn-ghost btn-sm" onclick="abrirModalEditarUsuario('${u.id}','${u.areaId}',${u.activo},'${u.email||""}')">Editar</button>`
+                ? `<button class="btn btn-ghost btn-sm" onclick="abrirModalEditarUsuario('${u.id}','${escapedArea}',${u.activo},'${escapedEmail}','${escapedCed}')">Editar</button>`
                 : '<span style="color:var(--text3); font-size:0.8rem">—</span>'}
             </td>
-          </tr>
-        `).join("")}
+          </tr>`;
+        }).join("")}
       </tbody>
     </table>
   `;
@@ -1466,75 +1533,88 @@ async function loadSAUsuarios() {
 
 function abrirModalCrearUsuario() {
   STATE.userEditId = null;
-  document.getElementById("modal-user-title").textContent  = "Nuevo usuario";
-  document.getElementById("user-username").value           = "";
-  document.getElementById("user-username").disabled        = false;
-  document.getElementById("user-password").value           = "";
-  document.getElementById("user-rol-group").style.display  = "block";
-  document.getElementById("user-rol").value                = "";
-  document.getElementById("user-area-group").style.display = "none";
+  document.getElementById("modal-user-title").textContent   = "Nuevo usuario";
+  document.getElementById("user-username").value            = "";
+  document.getElementById("user-username").disabled         = false;
+  document.getElementById("user-password").value            = "";
+  document.getElementById("user-rol-group").style.display   = "block";
+  document.getElementById("user-rol").value                 = "";
+  document.getElementById("user-area-group").style.display  = "none";
   document.getElementById("user-activo-group").style.display = "none";
   document.getElementById("user-email-group").style.display  = "none";
-  document.getElementById("user-pass-hint").style.display  = "none";
-  document.getElementById("user-pass-req").style.display   = "";
-  document.getElementById("user-edit-id").value            = "";
+  document.getElementById("user-cedula-group").style.display = "none";
+  document.getElementById("user-cedula").value              = "";
+  document.getElementById("user-pass-hint").style.display   = "none";
+  document.getElementById("user-pass-req").style.display    = "";
+  document.getElementById("user-edit-id").value             = "";
   populateAreaSelect();
   abrirModal("modal-usuario");
 }
 
-function abrirModalEditarUsuario(id, areaId, activo, email = "") {
+function abrirModalEditarUsuario(id, areaId, activo, email = "", cedula = "") {
   STATE.userEditId = id;
-  document.getElementById("modal-user-title").textContent  = "Editar usuario";
-  document.getElementById("user-username").value           = "";
-  document.getElementById("user-username").disabled        = true;
-  document.getElementById("user-password").value           = "";
-  document.getElementById("user-rol-group").style.display  = "none";
-  document.getElementById("user-area-group").style.display = "block";
+  document.getElementById("modal-user-title").textContent   = "Editar usuario";
+  document.getElementById("user-username").value            = "";
+  document.getElementById("user-username").disabled         = true;
+  document.getElementById("user-password").value            = "";
+  document.getElementById("user-rol-group").style.display   = "none";
+  document.getElementById("user-area-group").style.display  = "block";
   document.getElementById("user-activo-group").style.display = "block";
-  document.getElementById("user-activo").value             = activo ? "true" : "false";
-  document.getElementById("user-pass-hint").style.display  = "block";
-  document.getElementById("user-pass-req").style.display   = "none";
-  document.getElementById("user-edit-id").value            = id;
-  document.getElementById("user-email-group").style.display = "block";
-  document.getElementById("user-email").value              = email || "";
+  document.getElementById("user-activo").value              = activo ? "true" : "false";
+  document.getElementById("user-pass-hint").style.display   = "block";
+  document.getElementById("user-pass-req").style.display    = "none";
+  document.getElementById("user-edit-id").value             = id;
+  document.getElementById("user-email-group").style.display  = "block";
+  document.getElementById("user-email").value               = email || "";
+  document.getElementById("user-cedula-group").style.display = "block";
+  document.getElementById("user-cedula").value              = cedula || "";
   populateAreaSelect(areaId);
   abrirModal("modal-usuario");
 }
 
-function populateAreaSelect(selectedId = "") {
+function populateAreaSelect(selectedIds = "") {
   const sel = document.getElementById("user-area");
-  sel.innerHTML = `<option value="">Sin área asignada</option>` +
-    STATE.areasDisponibles.map(a =>
-      `<option value="${a.id}" ${a.id === selectedId ? "selected" : ""}>${a.nombre}</option>`
-    ).join("");
+  const selected = typeof selectedIds === "string"
+    ? selectedIds.split(",").map(s => s.trim()).filter(Boolean)
+    : (Array.isArray(selectedIds) ? selectedIds.map(String) : []);
+  sel.innerHTML = STATE.areasDisponibles.map(a =>
+    `<option value="${a.id}" ${selected.includes(String(a.id)) ? "selected" : ""}>${a.nombre}</option>`
+  ).join("");
 }
 
 function toggleAreaField() {
   const rol = document.getElementById("user-rol").value;
-  document.getElementById("user-area-group").style.display = rol === "ADMIN" ? "block" : "none";
+  const isAdmin = rol === "ADMIN";
+  document.getElementById("user-area-group").style.display   = isAdmin ? "block" : "none";
+  document.getElementById("user-email-group").style.display  = isAdmin ? "block" : "none";
+  document.getElementById("user-cedula-group").style.display = isAdmin ? "block" : "none";
 }
 
 async function guardarUsuario() {
   const id       = document.getElementById("user-edit-id").value;
   const password = document.getElementById("user-password").value;
-  const areaId   = document.getElementById("user-area").value;
+  const areaEl   = document.getElementById("user-area");
+  const areaId   = Array.from(areaEl.selectedOptions).map(o => o.value).filter(Boolean).join(",");
 
   if (!id) {
     const username = document.getElementById("user-username").value.trim();
     const rol      = document.getElementById("user-rol").value;
+    const email    = document.getElementById("user-email") ? document.getElementById("user-email").value.trim() : "";
+    const cedula   = document.getElementById("user-cedula") ? document.getElementById("user-cedula").value.trim() : "";
     if (!username || !password || !rol) { toast("Completa todos los campos requeridos", "error"); return; }
     if (password.length < 6) { toast("La contraseña debe tener al menos 6 caracteres", "error"); return; }
     const ok = await confirm("Crear usuario", `¿Crear el usuario "${username}" con rol ${rol}?`, "Crear");
     if (!ok) return;
-    const r = await api("crear_usuario", { username, password, rol, areaId });
+    const r = await api("crear_usuario", { username, password, rol, areaId, email, cedula });
     if (r.ok) { toast(r.mensaje, "success"); cerrarModal("modal-usuario"); loadSAUsuarios(); }
     else toast(r.error, "error");
   } else {
     const activo = document.getElementById("user-activo").value === "true";
     const email  = document.getElementById("user-email") ? document.getElementById("user-email").value.trim() : "";
+    const cedula = document.getElementById("user-cedula") ? document.getElementById("user-cedula").value.trim() : "";
     const ok     = await confirm("Guardar cambios", "¿Guardar los cambios del usuario?", "Guardar");
     if (!ok) return;
-    const data = { id, areaId, activo, email };
+    const data = { id, areaId, activo, email, cedula };
     if (password && password.length >= 6) data.nuevaPassword = password;
     else if (password && password.length > 0) { toast("La contraseña debe tener al menos 6 caracteres", "error"); return; }
     const r = await api("editar_usuario", data);
@@ -1594,7 +1674,162 @@ async function loadSAConfig() {
       </div>
       <div id="diagnostico-resultado" style="margin-top:1rem"></div>
     </div>
+    <div class="config-card" style="margin-top:1.5rem">
+      <div class="config-card-header" style="margin-bottom:0.75rem">
+        <div>
+          <div class="config-card-title">Migración de áreas</div>
+          <div class="config-card-desc">
+            Realiza en un solo clic:<br>
+            1. Renombra <strong>Administradora General → Restaurante</strong><br>
+            2. Agrega el área <strong>Talento Humano</strong> (si no existe)<br>
+            3. Crea el usuario admin <strong>talento.humano</strong> (contraseña temporal: Goyavier2026#)<br>
+            4. Actualiza los AREA_IDs de todos los admins en USUARIOS<br>
+            5. Repara AREA_IDs huérfanos en APROBACIONES<br>
+            <em>Ejecutar una sola vez.</em>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" onclick="ejecutarMigracionAreas()" style="border-color:rgba(251,191,36,0.5);color:#fbbf24">⚡ Aplicar migración de áreas</button>
+      <div id="migracion-resultado" style="margin-top:1rem"></div>
+    </div>
+    <div class="config-card" style="margin-top:1.5rem">
+      <div class="config-card-header" style="margin-bottom:0.75rem">
+        <div>
+          <div class="config-card-title">Agregar columna CÉDULA a usuarios</div>
+          <div class="config-card-desc">
+            Agrega la columna <strong>CEDULA</strong> (y EMAIL si falta) a la hoja USUARIOS del Sheet.<br>
+            Necesario para vincular cuentas admin con sus registros de colaborador.<br>
+            <em>Ejecutar una sola vez. Es seguro repetirlo.</em>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" onclick="ejecutarMigracionCedula()" style="border-color:rgba(99,102,241,0.5);color:#818cf8">⚡ Agregar columna CÉDULA</button>
+      <div id="cedula-migration-resultado" style="margin-top:1rem"></div>
+    </div>
+    <div class="config-card" style="margin-top:1.5rem">
+      <div class="config-card-header" style="margin-bottom:0.75rem">
+        <div>
+          <div class="config-card-title">Setup jefes de área académica</div>
+          <div class="config-card-desc">
+            Crea las 8 áreas académicas y sus usuarios administradores:<br>
+            <strong>Matemáticas · Lenguaje · Ciencias Sociales · Ciencias Naturales · Inglés · Artes · Tecnología e Informática · Educación Física</strong><br>
+            <em>Idempotente — seguro repetirlo si ya existen.</em>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" onclick="ejecutarSetupJefesArea()" style="border-color:rgba(20,184,166,0.5);color:#2dd4bf">⚡ Crear áreas y usuarios</button>
+      <div id="jefes-area-resultado" style="margin-top:1rem"></div>
+    </div>
+    <div class="config-card" style="margin-top:1.5rem">
+      <div class="config-card-header" style="margin-bottom:0.75rem">
+        <div>
+          <div class="config-card-title">Columnas de tipo en colaboradores</div>
+          <div class="config-card-desc">
+            Agrega las columnas <strong>TIPO_COLABORADOR</strong>, <strong>NIVEL_EDUCATIVO</strong> y <strong>AREAS_REQUERIDAS</strong> a la hoja COLABORADORES.<br>
+            Necesarias para determinar qué áreas debe aprobar cada colaborador según su tipo (Docente / Administrativo / Servicios).<br>
+            <em>Idempotente — seguro repetirlo.</em>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" onclick="ejecutarMigracionAreasColab()" style="border-color:rgba(234,179,8,0.5);color:#facc15">⚡ Agregar columnas TIPO_COLABORADOR / NIVEL_EDUCATIVO / AREAS_REQUERIDAS</button>
+      <div id="areas-colab-migration-resultado" style="margin-top:1rem"></div>
+    </div>
+    <div class="config-card" style="margin-top:1.5rem">
+      <div class="config-card-header" style="margin-bottom:0.75rem">
+        <div>
+          <div class="config-card-title">Clasificar áreas (GENERAL / DEPARTAMENTAL)</div>
+          <div class="config-card-desc">
+            Agrega la columna <strong>TIPO</strong> a la hoja AREAS y clasifica cada área.<br>
+            Áreas académicas = <strong>DEPARTAMENTAL</strong> (solo para docentes de ese depto).<br>
+            El resto = <strong>GENERAL</strong> (requeridas para todos).<br>
+            <em>Idempotente — seguro repetirlo.</em>
+          </div>
+        </div>
+      </div>
+      <button class="btn btn-ghost" onclick="ejecutarMigracionTipoAreas()" style="border-color:rgba(168,85,247,0.5);color:#c084fc">⚡ Clasificar áreas GENERAL / DEPARTAMENTAL</button>
+      <div id="tipo-areas-migration-resultado" style="margin-top:1rem"></div>
+    </div>
   `;
+}
+
+async function ejecutarMigracionAreas() {
+  const ok = await confirm(
+    "Migración de áreas",
+    "¿Ejecutar la migración completa?\n\n• Renombra 'Administradora General' → 'Restaurante'\n• Agrega el área 'Talento Humano'\n• Crea el usuario admin 'talento.humano' (contraseña: Goyavier2026#)\n• Actualiza AREA_IDs de admins en USUARIOS\n• Repara AREA_IDs en APROBACIONES\n\nEsta acción modifica directamente el Google Sheet.",
+    "Aplicar migración", true
+  );
+  if (!ok) return;
+  const r = await api("migracion_areas");
+  const el = document.getElementById("migracion-resultado");
+  if (r.ok) {
+    el.innerHTML = `<div class="alert-banner success"><span>✅</span><div>${r.mensaje}</div></div>`;
+  } else {
+    el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`;
+  }
+}
+
+async function ejecutarMigracionCedula() {
+  const ok = await confirm(
+    "Agregar columna CÉDULA",
+    "¿Agregar las columnas EMAIL y CEDULA a la hoja USUARIOS?\n\nEsta acción es segura y no modifica datos existentes.",
+    "Agregar columnas", true
+  );
+  if (!ok) return;
+  const r = await api("agregar_cedula_usuarios");
+  const el = document.getElementById("cedula-migration-resultado");
+  if (r.ok) {
+    el.innerHTML = `<div class="alert-banner success"><span>✅</span><div>${r.mensaje}</div></div>`;
+  } else {
+    el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`;
+  }
+}
+
+async function ejecutarSetupJefesArea() {
+  const ok = await confirm(
+    "Setup jefes de área académica",
+    "¿Crear las 8 áreas académicas y sus usuarios administradores?\n\n• Matemáticas — candy.villamizar\n• Lenguaje — jennym.ramirez\n• Ciencias Sociales — johand.camargo\n• Ciencias Naturales — lizetho.ballesteros\n• Inglés — frankj.acevedo\n• Artes — linam.solano\n• Tecnología e Informática — leydie.arguello\n• Educación Física — yudia.cubides\n\nContraseña temporal: Goyavier2026#\nNo duplica si ya existen.",
+    "Crear", true
+  );
+  if (!ok) return;
+  const r = await api("agregar_jefes_area");
+  const el = document.getElementById("jefes-area-resultado");
+  if (r.ok) {
+    el.innerHTML = `<div class="alert-banner success"><span>✅</span><div>${r.mensaje}<br><pre style="font-size:0.7rem;margin-top:0.5rem;white-space:pre-wrap;color:var(--text2)">${r.detalle || ""}</pre></div></div>`;
+  } else {
+    el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`;
+  }
+}
+
+async function ejecutarMigracionAreasColab() {
+  const ok = await confirm(
+    "Agregar columnas de tipo a colaboradores",
+    "¿Agregar las columnas TIPO_COLABORADOR, NIVEL_EDUCATIVO y AREAS_REQUERIDAS a la hoja COLABORADORES?\n\nEsta acción es segura y no modifica datos existentes.\nDespués podrás editar cada colaborador para asignar su tipo (Docente / Administrativo / Servicios) y, si es docente, su nivel y área académica.",
+    "Agregar columnas", true
+  );
+  if (!ok) return;
+  const r = await api("agregar_cols_colaboradores");
+  const el = document.getElementById("areas-colab-migration-resultado");
+  if (r.ok) {
+    el.innerHTML = `<div class="alert-banner success"><span>✅</span><div>${r.mensaje}</div></div>`;
+  } else {
+    el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`;
+  }
+}
+
+async function ejecutarMigracionTipoAreas() {
+  const ok = await confirm(
+    "Clasificar áreas GENERAL / DEPARTAMENTAL",
+    "¿Agregar la columna TIPO a la hoja AREAS y clasificar las áreas?\n\n• Áreas académicas (Matemáticas, Inglés, etc.) → DEPARTAMENTAL\n• Resto (Biblioteca, Restaurante, Rectoría, etc.) → GENERAL\n\nEsta acción es segura e idempotente.",
+    "Clasificar", true
+  );
+  if (!ok) return;
+  const r = await api("agregar_tipo_areas");
+  const el = document.getElementById("tipo-areas-migration-resultado");
+  if (r.ok) {
+    el.innerHTML = `<div class="alert-banner success"><span>✅</span><div>${r.mensaje}</div></div>`;
+  } else {
+    el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`;
+  }
 }
 
 async function loadCorreosSA() {
@@ -1626,10 +1861,11 @@ async function loadCorreosSA() {
         <th>Admin (usuario)</th><th>Área</th><th>Estado</th><th>Correo de notificación</th><th>Acción</th>
       </tr></thead>
       <tbody>
-        ${admins.map(u => `
-          <tr>
+        ${admins.map(u => {
+          const areasLabel = (u.areaNombres && u.areaNombres.length) ? u.areaNombres.join(", ") : (u.areaNombre || "—");
+          return `<tr>
             <td style="font-weight:500">${u.username}</td>
-            <td>${u.areaNombre || "—"}</td>
+            <td style="font-size:0.85rem">${areasLabel}</td>
             <td><span class="badge ${u.activo ? "badge-aprobado" : "badge-inactivo"}">${u.activo ? "Activo" : "Inactivo"}</span></td>
             <td>
               <input type="email" id="admin-email-${u.id}" class="form-input"
@@ -1639,8 +1875,8 @@ async function loadCorreosSA() {
             <td>
               <button class="btn btn-ghost btn-sm" onclick="guardarEmailAdmin('${u.id}')">💾 Guardar</button>
             </td>
-          </tr>
-        `).join("")}
+          </tr>`;
+        }).join("")}
       </tbody>
     </table>
     <div style="margin-top:0.75rem; font-size:0.78rem; color:var(--text2)">
