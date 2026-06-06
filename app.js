@@ -2801,52 +2801,54 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
     fechaFormateada = doc.fechaEmision || new Date().toLocaleDateString('es-CO', { year:'numeric', month:'long', day:'numeric' });
   }
 
+  // Todos los selectores llevan el prefijo .ps-doc para que el <style> inyectado
+  // via innerHTML no afecte el CSS global de la app (evita side-effects de layout).
   const css =
-    '*{box-sizing:border-box;margin:0;padding:0}' +
-    '@page{size:8.5in 11in;margin:0}' +
-    'html,body{margin:0;padding:0;width:8.5in}' +
-    'body{font-family:Arial,sans-serif;color:#1a1a2e;background:#fff}' +
-    '.page{width:8.5in;min-height:11in;display:flex;flex-direction:column}' +
-    '.hdr{display:flex;align-items:center;gap:20px;padding:24px 44px 20px;' +
+    '.ps-doc,.ps-doc *{box-sizing:border-box;margin:0;padding:0}' +
+    '.ps-doc{font-family:Arial,sans-serif;color:#1a1a2e;background:#fff;display:block;width:816px}' +
+    '.ps-doc .page{width:816px;min-height:1056px;display:flex;flex-direction:column;background:#fff}' +
+    '.ps-doc .hdr{display:flex;align-items:center;gap:20px;padding:24px 44px 20px;' +
       'border-bottom:3px solid #1e3a5f;background:#f8faff;flex-shrink:0}' +
-    '.inst{display:flex;flex-direction:column;justify-content:center}' +
-    '.inst-name{font-size:17px;font-weight:700;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px}' +
-    '.inst-sub{font-size:11px;color:#999;margin-top:3px}' +
-    '.title-blk{text-align:center;padding:26px 44px 22px;border-bottom:1px solid #dde4f0;flex-shrink:0}' +
-    '.t-badge{display:inline-block;background:#1e3a5f;color:#fff;font-size:9px;font-weight:700;' +
+    '.ps-doc .inst{display:flex;flex-direction:column;justify-content:center}' +
+    '.ps-doc .inst-name{font-size:17px;font-weight:700;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px}' +
+    '.ps-doc .inst-sub{font-size:11px;color:#999;margin-top:3px}' +
+    '.ps-doc .title-blk{text-align:center;padding:26px 44px 22px;border-bottom:1px solid #dde4f0;flex-shrink:0}' +
+    '.ps-doc .t-badge{display:inline-block;background:#1e3a5f;color:#fff;font-size:9px;font-weight:700;' +
       'letter-spacing:2px;text-transform:uppercase;padding:5px 16px;border-radius:20px;margin-bottom:12px}' +
-    '.t-main{font-size:30px;font-weight:700;color:#1e3a5f;letter-spacing:4px;text-transform:uppercase}' +
-    '.t-desc{font-size:10px;color:#bbb;margin-top:8px;letter-spacing:2px;text-transform:uppercase}' +
-    '.body{flex:1;padding:26px 44px 22px;display:flex;flex-direction:column;justify-content:space-between}' +
-    '.intro{font-size:12px;color:#666;text-align:center;margin-bottom:16px}' +
-    '.person{background:#eef3ff;border:2px solid #c5d5f0;border-radius:12px;' +
+    '.ps-doc .t-main{font-size:30px;font-weight:700;color:#1e3a5f;letter-spacing:4px;text-transform:uppercase}' +
+    '.ps-doc .t-desc{font-size:10px;color:#bbb;margin-top:8px;letter-spacing:2px;text-transform:uppercase}' +
+    '.ps-doc .body{flex:1;padding:26px 44px 22px;display:flex;flex-direction:column;justify-content:space-between}' +
+    '.ps-doc .intro{font-size:12px;color:#666;text-align:center;margin-bottom:16px}' +
+    '.ps-doc .person{background:#eef3ff;border:2px solid #c5d5f0;border-radius:12px;' +
       'padding:18px 32px;text-align:center;margin-bottom:16px}' +
-    '.p-name{font-size:23px;font-weight:700;color:#1e3a5f;text-transform:uppercase}' +
-    '.p-cc{font-size:12px;color:#667;margin-top:7px}' +
-    '.cert-txt{font-size:12px;color:#444;line-height:1.9;text-align:justify;margin-bottom:16px}' +
-    '.areas{background:#f0f7f0;border:1px solid #b8dfb8;border-radius:10px;' +
+    '.ps-doc .p-name{font-size:23px;font-weight:700;color:#1e3a5f;text-transform:uppercase}' +
+    '.ps-doc .p-cc{font-size:12px;color:#667;margin-top:7px}' +
+    '.ps-doc .cert-txt{font-size:12px;color:#444;line-height:1.9;text-align:justify;margin-bottom:16px}' +
+    '.ps-doc .areas{background:#f0f7f0;border:1px solid #b8dfb8;border-radius:10px;' +
       'padding:14px 20px;margin-bottom:16px}' +
-    '.areas-title{font-size:9px;font-weight:700;color:#2d7a2d;letter-spacing:1.5px;' +
+    '.ps-doc .areas-title{font-size:9px;font-weight:700;color:#2d7a2d;letter-spacing:1.5px;' +
       'text-transform:uppercase;margin-bottom:10px}' +
-    '.areas-tbl{width:100%;border-collapse:collapse}' +
-    '.atd-chk{color:#2d7a2d;font-weight:700;font-size:11px;padding:3px 6px 3px 0;width:16px;vertical-align:middle}' +
-    '.atd-nom{font-size:10px;font-weight:600;color:#1a4a1a;padding:3px 8px 3px 0;vertical-align:middle}' +
-    '.atd-sep{font-size:10px;color:#888;padding:3px 6px;vertical-align:middle}' +
-    '.atd-resp{font-size:10px;color:#3a5a3a;padding:3px 0;vertical-align:middle;font-style:italic}' +
-    '.fecha{font-size:12px;color:#555;text-align:center;font-style:italic;margin-bottom:16px}' +
-    '.sigs{display:flex;justify-content:space-around;margin-bottom:18px}' +
-    '.sig{text-align:center;width:180px}' +
-    '.sig-space{height:44px}' +
-    '.sig-line{border-top:1px solid #aaa;margin-bottom:5px}' +
-    '.sig-lbl{font-size:10px;color:#888}' +
-    '.verif{background:#1e3a5f;border-radius:12px;padding:18px 28px;text-align:center}' +
-    '.v-lbl{font-size:9px;color:rgba(255,255,255,.6);letter-spacing:2px;text-transform:uppercase}' +
-    '.v-code{font-family:monospace;font-size:20px;font-weight:700;color:#fff;letter-spacing:5px;margin-top:8px}' +
-    '.v-hint{font-size:9px;color:rgba(255,255,255,.5);margin-top:5px}' +
-    '.ftr{background:#f0f4f8;padding:12px 44px;text-align:center;font-size:9px;' +
+    '.ps-doc .areas-tbl{width:100%;border-collapse:collapse}' +
+    '.ps-doc .atd-chk{color:#2d7a2d;font-weight:700;font-size:11px;padding:3px 6px 3px 0;width:16px;vertical-align:middle}' +
+    '.ps-doc .atd-nom{font-size:10px;font-weight:600;color:#1a4a1a;padding:3px 8px 3px 0;vertical-align:middle}' +
+    '.ps-doc .atd-sep{font-size:10px;color:#888;padding:3px 6px;vertical-align:middle}' +
+    '.ps-doc .atd-resp{font-size:10px;color:#3a5a3a;padding:3px 0;vertical-align:middle;font-style:italic}' +
+    '.ps-doc .fecha{font-size:12px;color:#555;text-align:center;font-style:italic;margin-bottom:16px}' +
+    '.ps-doc .sigs{display:flex;justify-content:space-around;margin-bottom:18px}' +
+    '.ps-doc .sig{text-align:center;width:180px}' +
+    '.ps-doc .sig-space{height:44px}' +
+    '.ps-doc .sig-line{border-top:1px solid #aaa;margin-bottom:5px}' +
+    '.ps-doc .sig-lbl{font-size:10px;color:#888}' +
+    '.ps-doc .verif{background:#1e3a5f;border-radius:12px;padding:18px 28px;text-align:center}' +
+    '.ps-doc .v-lbl{font-size:9px;color:rgba(255,255,255,.6);letter-spacing:2px;text-transform:uppercase}' +
+    '.ps-doc .v-code{font-family:monospace;font-size:20px;font-weight:700;color:#fff;letter-spacing:5px;margin-top:8px}' +
+    '.ps-doc .v-hint{font-size:9px;color:rgba(255,255,255,.5);margin-top:5px}' +
+    '.ps-doc .ftr{background:#f0f4f8;padding:12px 44px;text-align:center;font-size:9px;' +
       'color:#aaa;border-top:1px solid #e8edf4;line-height:1.8;flex-shrink:0}';
 
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${css}</style></head><body>` +
+  // Sin DOCTYPE/html/head/body: evita el parsing de fragmento HTML que puede reordenar
+  // el <style> y crear efectos secundarios sobre el DOM de la app.
+  return `<div class="ps-doc"><style>${css}</style>` +
     `<div class="page">` +
       `<div class="hdr">${logoTag}<div class="inst">` +
         `<div class="inst-name">${institucion}</div>` +
@@ -2885,7 +2887,7 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
       `</div></div>` +
       `<div class="ftr">Documento generado autom&aacute;ticamente &middot; ` +
         `Sistema de Paz y Salvo Institucional &middot; ${institucion} &middot; ${fechaFormateada}</div>` +
-    `</div></body></html>`;
+    `</div></div>`;
 }
 
 // Única fuente oficial de generación del PDF. Valida los datos, convierte el
@@ -2916,12 +2918,13 @@ async function _generarPdfClienteSide(doc) {
   const htmlStr = _generarHtmlCertificado(doc, logoDataUrl);
   console.log('[PDF] ► HTML generado:', htmlStr.length, 'chars');
 
-  // position:absolute + visibility:hidden evita dos problemas conocidos de html2canvas:
-  //   1. z-index:-9999 coloca el elemento detrás del fondo → PDF en blanco.
-  //   2. position:fixed hereda el scrollX actual del browser → recorte en el lado izquierdo.
-  // Con scrollX:0/scrollY:0 en html2canvas el capturado siempre parte desde (0,0) del documento.
+  // position:fixed garantiza getBoundingClientRect().left = 0 siempre, sin importar
+  // el scrollX actual de la página. opacity:0 lo oculta al usuario sin crear un
+  // stacking context negativo (z-index:-9999 causaba que html2canvas capturara el
+  // fondo de la app en lugar del certificado → PDF en blanco).
+  // scrollX:0/scrollY:0 en html2canvas ancla el capturado en (0,0) → sin recorte.
   const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:absolute;top:0;left:0;width:816px;visibility:hidden;pointer-events:none;overflow:visible';
+  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:816px;opacity:0;pointer-events:none;overflow:visible';
   wrapper.innerHTML = htmlStr;
   document.body.appendChild(wrapper);
 
