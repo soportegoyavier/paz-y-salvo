@@ -1,8 +1,9 @@
 ﻿// ── CONFIG ──────────────────────────────────────────────
-const BACKEND_URL = "https://script.google.com/macros/s/AKfycbyud3GSvf1-_0hQEcxxKWoHzjWqDIn4D2On3qxUbLdyKMeZhjuMlkin30noo4EwZpYT/exec";
+const BACKEND_URL = "https://ihzgfcojethwxphbnlmg.supabase.co/functions/v1/ps-api";
 
-// ⚠️ Reemplaza con tu Client ID de Google Cloud Console
-const GOOGLE_CLIENT_ID = "818503445929-8nacop2o8g1us5pkp7256qr0atu91ldo.apps.googleusercontent.com";
+// Supabase Auth — usar solo la clave pública (anon), NUNCA la service_role aquí
+const SUPABASE_URL      = "https://ihzgfcojethwxphbnlmg.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloemdmY29qZXRod3hwaGJubG1nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1ODY2MTAsImV4cCI6MjA5NjE2MjYxMH0.SQgh4URnY-I48yON3ogX4x6t2git5SRND35Vh-EV_og"; // Dashboard → Settings → API → anon public key
 
 // ── LOGO ─────────────────────────────────────────────────
 // OPCIÓN A (recomendada): pega aquí el Data URI base64 del logo PNG o SVG.
@@ -106,91 +107,168 @@ async function _obtenerLogoBase64() {
     setTimeout(function() { start(); }, 50);
   };
 
-  document.addEventListener("DOMContentLoaded", function() {
+  document.addEventListener("DOMContentLoaded", async function() {
     start();
-    // Insertar logo (prioriza base64 sobre URL de Drive)
+
+    // Logo en splash + lugares habituales
     var logoSrc = LOGO_DATA_URL || LOGO_URL;
     if (logoSrc) {
-      var loginImg   = document.getElementById("login-logo-img");
-      var loginFb    = document.getElementById("login-logo-fallback");
-      var headerImg  = document.getElementById("header-logo-img");
-      var headerFb   = document.getElementById("header-logo-fallback");
-      var headerDiv  = document.getElementById("header-logo-divider");
+      var splImg = document.getElementById("spl-logo-img");
+      var splTxt = document.getElementById("spl-logo-txt");
+      if (splImg) { splImg.src = logoSrc; splImg.style.display = "block"; }
+      if (splTxt) splTxt.style.display = "none";
+
+      var loginImg  = document.getElementById("login-logo-img");
+      var loginFb   = document.getElementById("login-logo-fallback");
+      var headerImg = document.getElementById("header-logo-img");
+      var headerFb  = document.getElementById("header-logo-fallback");
+      var headerDiv = document.getElementById("header-logo-divider");
       if (loginImg)  { loginImg.src = logoSrc;  loginImg.style.display  = "block"; }
       if (loginFb)   { loginFb.style.display  = "none"; }
       if (headerImg) { headerImg.src = logoSrc; headerImg.style.display = "block"; }
       if (headerFb)  { headerFb.style.display  = "none"; }
       if (headerDiv) { headerDiv.style.display = "block"; }
     }
+
+    // Inicializar Supabase Auth y restaurar sesión si existe
+    _initSupabase();
+    if (supabaseClient) {
+      _setSplashMsg("Restaurando sesión...");
+      try {
+        const restoreOk = await Promise.race([
+          (async () => {
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            if (!session) return false;
+            return await _iniciarDesdeSession(session);
+          })(),
+          new Promise(resolve => setTimeout(() => resolve('timeout'), 13000)),
+        ]);
+        if (restoreOk === 'timeout') {
+          // Sesión colgada — limpiar y mostrar login
+          try { await supabaseClient.auth.signOut(); } catch(_) {}
+          _limpiarSesionLocal();
+        } else if (restoreOk) {
+          return;
+        }
+      } catch(e) {}
+    }
+
+    // Sin sesión válida → mostrar login
+    _setSplashMsg("Listo");
+    _hideSplash();
   });
 })();
 
-// ── GMAIL TOKEN ──────────────────────────────────────────
-const _SS_GMAIL_KEY = 'pazysalvo_gmail_token';
-const _SS_GMAIL_EXP = 'pazysalvo_gmail_exp';
-let _gmailToken    = null;
-let _gmailTokenExp = 0;
+// ── SPLASH SCREEN ────────────────────────────────────────
+function _setSplashMsg(msg) {
+  const el = document.getElementById("spl-msg");
+  if (el) el.textContent = msg;
+}
 
-function _cargarTokenGmailSesion() {
+function _hideSplash() {
+  const splash = document.getElementById("splash");
+  if (!splash) return;
+  splash.classList.add("fade-out");
+  setTimeout(() => { if (splash.parentNode) splash.parentNode.removeChild(splash); }, 380);
+}
+
+// ── SUPABASE AUTH CLIENT ─────────────────────────────────
+let supabaseClient = null;
+
+function _initSupabase() {
+  if (supabaseClient) return true;
+  if (!window.supabase || !window.supabase.createClient) return false;
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabaseClient.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_OUT' && STATE.rol) {
+      handleLogout();
+    } else if (event === 'SIGNED_IN' && session && !STATE.rol) {
+      // Callback OAuth — sesión establecida después de redireccionamiento Google
+      await _iniciarDesdeSession(session);
+    }
+  });
+  return true;
+}
+
+async function _iniciarDesdeSession(session) {
+  if (!_poblarStateDesdeSession(session)) {
+    await supabaseClient.auth.signOut();
+    _limpiarSesionLocal();
+    return false;
+  }
   try {
-    const t = sessionStorage.getItem(_SS_GMAIL_KEY);
-    const e = parseInt(sessionStorage.getItem(_SS_GMAIL_EXP) || '0', 10);
-    if (t && Date.now() < e) { _gmailToken = t; _gmailTokenExp = e; }
+    const tok = session.access_token;
+    const [rv, areasR] = await Promise.all([api("verify_session", {}, tok), api("get_areas", {}, tok)]);
+    if (rv.ok) {
+      if (areasR.ok) {
+        STATE.areasDisponibles = areasR.areas;
+        STATE.areaNombres = {};
+        for (const a of areasR.areas) STATE.areaNombres[a.id] = a.nombre;
+        if (STATE.areaId) STATE.areaNombre = STATE.areaNombres[STATE.areaId] || STATE.areaId;
+      }
+      if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
+      _hideSplash();
+      iniciarApp();
+      if (rv.cambiarPassword) {
+        document.getElementById("pl-actual").value    = "";
+        document.getElementById("pl-nueva").value     = "";
+        document.getElementById("pl-confirmar").value = "";
+        document.getElementById("pl-error").classList.remove("visible");
+        abrirModal("modal-primer-login");
+      }
+      return true;
+    }
+    await supabaseClient.auth.signOut();
+    _limpiarSesionLocal();
+  } catch(e) {}
+  return false;
+}
+
+function _decodeJwtClaims(token) {
+  try {
+    const payload = token.split('.')[1];
+    return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+  } catch(e) { return {}; }
+}
+
+function _poblarStateDesdeSession(session) {
+  if (!session) return false;
+  const claims = _decodeJwtClaims(session.access_token);
+  if (!claims.rol) return false;
+  STATE.rol           = claims.rol;
+  STATE.username      = claims.username || session.user.email || '';
+  STATE.areaId        = (claims.area_ids || [])[0] || null;
+  STATE.areaIds       = claims.area_ids || [];
+  STATE.areaNombres   = {};
+  STATE.currentAreaId = STATE.areaId;
+  STATE.cedulaPropia  = claims.cedula || sessionStorage.getItem('pys_cedula') || null;
+  STATE.email         = session.user.email || null;
+  return true;
+}
+
+// ── PERSISTENCIA DE SESIÓN — Supabase Auth gestiona el JWT automáticamente ───
+const _LS_SESSION_KEY = 'pys_session_v1'; // solo para limpiar el formato antiguo
+const _SESSION_MAX_AGE = 8 * 60 * 60 * 1000;
+
+function _guardarSesion() {
+  try {
+    if (STATE.cedulaPropia) sessionStorage.setItem('pys_cedula', STATE.cedulaPropia);
+    localStorage.removeItem(_LS_SESSION_KEY); // limpiar formato de sesión antiguo
   } catch(e) {}
 }
 
-function _limpiarTokenGmail() {
-  _gmailToken = null; _gmailTokenExp = 0;
-  try { sessionStorage.removeItem(_SS_GMAIL_KEY); sessionStorage.removeItem(_SS_GMAIL_EXP); } catch(e) {}
-}
-
-function _pedirGmailToken() {
-  if (_gmailToken && Date.now() < _gmailTokenExp) return Promise.resolve(_gmailToken);
-  return new Promise((resolve, reject) => {
-    if (!window.google) { reject(new Error('GIS no cargado')); return; }
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_CLIENT_ID,
-      scope: 'https://www.googleapis.com/auth/gmail.send',
-      callback: (resp) => {
-        if (resp.error) { reject(new Error(resp.error)); return; }
-        _gmailToken    = resp.access_token;
-        _gmailTokenExp = Date.now() + (resp.expires_in - 60) * 1000;
-        try {
-          sessionStorage.setItem(_SS_GMAIL_KEY, _gmailToken);
-          sessionStorage.setItem(_SS_GMAIL_EXP, String(_gmailTokenExp));
-        } catch(e) {}
-        setTimeout(() => { _gmailToken = null; }, (resp.expires_in - 60) * 1000);
-        resolve(_gmailToken);
-      }
-    });
-    client.requestToken();
-  });
-}
-
-async function _enviarCorreoGmail(para, asunto, cuerpo) {
+function _limpiarSesionLocal() {
   try {
-    const token = await _pedirGmailToken();
-    const msg = [
-      'To: ' + para,
-      'Subject: =?UTF-8?B?' + btoa(unescape(encodeURIComponent(asunto))) + '?=',
-      'Content-Type: text/plain; charset=UTF-8',
-      'MIME-Version: 1.0',
-      '',
-      cuerpo
-    ].join('\r\n');
-    const b64 = btoa(unescape(encodeURIComponent(msg)))
-      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ raw: b64 })
-    });
-    if (!res.ok) throw new Error('Gmail API ' + res.status);
-    return true;
-  } catch(e) {
-    console.warn('Error enviando correo:', e);
-    return false;
-  }
+    localStorage.removeItem(_LS_SESSION_KEY);
+    sessionStorage.removeItem('pys_cedula');
+  } catch(e) {}
+}
+
+// Con Supabase Auth la restauración es async — esta función siempre retorna false
+// La restauración real ocurre en DOMContentLoaded con supabaseClient.auth.getSession()
+function _restaurarSesionLocal() {
+  try { localStorage.removeItem(_LS_SESSION_KEY); } catch(e) {}
+  return false;
 }
 
 // ── ESTADO ──────────────────────────────────────────────
@@ -210,21 +288,29 @@ let STATE = {
   saColaboradores: [],
   saSelectedIds: new Set(),
   adminSelectedIds: new Set(),
-  masivaRegistros: []
+  masivaRegistros: [],
+  _vgSelected: new Set(),
+  _pdfCache: {}
 };
 
 // ── API ──────────────────────────────────────────────────
-async function api(action, data = {}) {
-  const body = { action, ...data };
-  if (STATE.token) body.token = STATE.token;
+async function api(action, data = {}, _token = null) {
+  const body    = { action, ...data };
+  const headers = { "Content-Type": "application/json" };
   try {
-    const res  = await fetch(BACKEND_URL, { method:"POST", headers:{"Content-Type":"text/plain"}, body: JSON.stringify(body) });
-    const text = await res.text();
-    const json = JSON.parse(text);
+    const token = _token || (supabaseClient
+      ? (await supabaseClient.auth.getSession()).data.session?.access_token
+      : null);
+    if (token) headers["Authorization"] = "Bearer " + token;
+    const ctrl = new AbortController();
+    const tid  = setTimeout(() => ctrl.abort(), 12000);
+    const res  = await fetch(BACKEND_URL, { method:"POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
+    clearTimeout(tid);
+    const json = await res.json();
     if (!json.ok && json.detalle) console.error("Backend error [" + action + "]:", json.detalle);
     return json;
   } catch (err) {
-    console.error("API error:", err);
+    if (err.name !== "AbortError") console.error("API error:", err);
     return { ok: false, error: "Error de conexión con el servidor" };
   }
 }
@@ -278,122 +364,182 @@ function switchMasivaTab(tabId, btn) {
 
 // ── LOGIN ────────────────────────────────────────────────
 async function handleLogin() {
-  const username = document.getElementById("login-username").value.trim();
+  const email    = document.getElementById("login-username").value.trim();
   const password = document.getElementById("login-password").value;
   const errEl    = document.getElementById("login-error");
   const btn      = document.getElementById("login-btn");
 
-  errEl.classList.remove("visible");
-  if (!username || !password) { errEl.textContent = "Completa todos los campos."; errEl.classList.add("visible"); return; }
-
-  btn.disabled = true;
-  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px"></div> Ingresando...';
-
-  const r = await api("login", { username, password });
-
-  if (!r.ok) {
+  function _resetBtn() {
     btn.disabled = false;
     btn.innerHTML = "Ingresar";
-    errEl.textContent = r.error || "Error al iniciar sesión";
-    errEl.classList.add("visible");
-    return;
   }
 
-  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px"></div> Cargando...';
-
-  STATE.token = r.token; STATE.rol = r.rol; STATE.username = r.username;
-  STATE.areaId = r.areaId; STATE.areaNombre = r.areaNombre;
-  STATE.areaIds = r.areaIds || (r.areaId ? [r.areaId] : []);
-  STATE.areaNombres = r.areaNombres || (r.areaId ? { [r.areaId]: r.areaNombre } : {});
-  STATE.currentAreaId = STATE.areaIds[0] || null;
-  if (r.cedula) STATE.cedulaPropia = r.cedula;
-
-  const areasR = await api("get_areas");
-  if (areasR.ok) STATE.areasDisponibles = areasR.areas;
-
-  iniciarApp();
-}
-
-function handleLogout() {
-  api("logout");
-  _limpiarTokenGmail();
-  STATE = { token:null, rol:null, username:null, areaId:null, areaNombre:null,
-            areaIds:[], areaNombres:{}, currentAreaId:null, areaColabs:{},
-            cedulaPropia:null,
-            areaColaboradores:[], areaFilter:"todos", areasDisponibles:[],
-            colabEditId:null, userEditId:null, gestionarColabId:null,
-            confirmResolve:null, saColaboradores:[], saSelectedIds: new Set(),
-            adminSelectedIds: new Set(), masivaRegistros:[] };
-  document.getElementById("screen-app").classList.remove("active");
-  document.getElementById("screen-login").classList.add("active");
-  document.getElementById("login-password").value = "";
-  document.getElementById("login-error").classList.remove("visible");
-}
-
-// ── LOGIN CON GOOGLE ─────────────────────────────────────
-// Usa OAuth2 token client (popup estándar) — evita restricciones de One Tap/FedCM
-function handleLoginGoogle() {
-  const errEl = document.getElementById("login-error");
-  const btn   = document.getElementById("login-google-btn");
   errEl.classList.remove("visible");
-
-  if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
-    errEl.textContent = "Google no disponible. Recarga la página.";
+  if (!email || !password) { errEl.textContent = "Completa todos los campos."; errEl.classList.add("visible"); return; }
+  if (!_initSupabase()) {
+    errEl.textContent = "Error al cargar el sistema de autenticación. Recarga la página.";
     errEl.classList.add("visible"); return;
   }
 
   btn.disabled = true;
-  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></div> Verificando...';
-
-  function _restoreBtn() {
-    btn.disabled = false;
-    btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/><path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg> Ingresar con Google';
-  }
+  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px"></div> Ingresando...';
 
   try {
-    const tokenClient = google.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_CLIENT_ID,
-      scope:     'openid email profile',
-      callback:  async (tokenResp) => {
-        if (tokenResp.error) {
-          errEl.textContent = tokenResp.error === 'access_denied'
-            ? "Acceso denegado. Intenta de nuevo."
-            : "Error de Google: " + tokenResp.error;
-          errEl.classList.add("visible");
-          _restoreBtn(); return;
-        }
-        try {
-          btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></div> Verificando...';
-          const r = await api("login_google", { accessToken: tokenResp.access_token });
-          if (!r.ok) {
-            errEl.textContent = r.error || "Error al iniciar sesión con Google";
-            errEl.classList.add("visible");
-            _restoreBtn(); return;
-          }
-          btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></div> Cargando...';
-          STATE.token = r.token; STATE.rol = r.rol; STATE.username = r.username;
-          STATE.areaId = r.areaId; STATE.areaNombre = r.areaNombre;
-          STATE.email  = r.email;
-          STATE.areaIds = r.areaIds || (r.areaId ? [r.areaId] : []);
-          STATE.areaNombres = r.areaNombres || (r.areaId ? { [r.areaId]: r.areaNombre } : {});
-          STATE.currentAreaId = STATE.areaIds[0] || null;
-          if (r.cedula) STATE.cedulaPropia = r.cedula;
-          const areasR = await api("get_areas");
-          if (areasR.ok) STATE.areasDisponibles = areasR.areas;
-          iniciarApp();
-        } catch(apiErr) {
-          errEl.textContent = "Error de conexión con el servidor.";
-          errEl.classList.add("visible");
-          _restoreBtn();
-        }
-      }
-    });
-    tokenClient.requestAccessToken({ prompt: 'select_account' });
+    const { data: authData, error: authError } = await supabaseClient.auth.signInWithPassword({ email, password });
+
+    if (authError) {
+      const msg = (authError.message || '').toLowerCase().includes('invalid')
+        ? 'Correo o contraseña incorrectos. Si no recuerdas tu contraseña, pide al administrador que la restablezca.'
+        : (authError.message || 'Error al iniciar sesión');
+      errEl.textContent = msg;
+      errEl.classList.add("visible");
+      _resetBtn(); return;
+    }
+
+    btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px"></div> Cargando...';
+
+    if (!_poblarStateDesdeSession(authData.session)) {
+      await supabaseClient.auth.signOut();
+      errEl.textContent = 'Tu cuenta aún no tiene permisos en el sistema. Contacta al administrador.';
+      errEl.classList.add("visible");
+      _resetBtn(); return;
+    }
+
+    // Obtener estado completo desde el backend (incluye cambiarPassword)
+    const vsR = await api("verify_session");
+    if (!vsR.ok) {
+      await supabaseClient.auth.signOut();
+      errEl.textContent = vsR.error || 'Error al verificar sesión.';
+      errEl.classList.add("visible");
+      _resetBtn(); return;
+    }
+
+    if (vsR.cambiarPassword) {
+      document.getElementById("pl-actual").value    = "";
+      document.getElementById("pl-nueva").value     = "";
+      document.getElementById("pl-confirmar").value = "";
+      document.getElementById("pl-error").classList.remove("visible");
+      abrirModal("modal-primer-login");
+      _resetBtn();
+      return;
+    }
+
+    const areasR = await api("get_areas");
+    if (areasR.ok) {
+      STATE.areasDisponibles = areasR.areas;
+      STATE.areaNombres = {};
+      for (const a of areasR.areas) STATE.areaNombres[a.id] = a.nombre;
+      if (STATE.areaId) STATE.areaNombre = STATE.areaNombres[STATE.areaId] || STATE.areaId;
+    }
+
+    _guardarSesion();
+    iniciarApp();
   } catch(e) {
-    console.error('Login Google error:', e);
-    errEl.textContent = "Error al iniciar Google Sign-In: " + (e && e.message ? e.message : e);
+    errEl.textContent = "Error de conexión. Intenta de nuevo.";
     errEl.classList.add("visible");
-    _restoreBtn();
+    _resetBtn();
+  }
+}
+
+function handleLogout() {
+  if (supabaseClient) supabaseClient.auth.signOut();
+  _limpiarSesionLocal();
+  STATE = { rol:null, username:null, areaId:null, areaNombre:null,
+            areaIds:[], areaNombres:{}, currentAreaId:null, areaColabs:{},
+            cedulaPropia:null, email:null,
+            areaColaboradores:[], areaFilter:"todos", areasDisponibles:[],
+            colabEditId:null, userEditId:null, gestionarColabId:null,
+            confirmResolve:null, saColaboradores:[], saSelectedIds: new Set(),
+            adminSelectedIds: new Set(), masivaRegistros:[],
+            _vgSelected: new Set(), _pdfCache: {} };
+  document.getElementById("screen-app").classList.remove("active");
+  document.getElementById("screen-login").classList.add("active");
+  document.getElementById("login-username").value = "";
+  document.getElementById("login-password").value = "";
+  document.getElementById("login-error").classList.remove("visible");
+  // Reiniciar animación del canvas del login
+  if (window._restartLoginCanvas) window._restartLoginCanvas();
+}
+
+async function handleCambiarPasswordPrimerLogin() {
+  const actual    = document.getElementById("pl-actual").value;
+  const nueva     = document.getElementById("pl-nueva").value;
+  const confirmar = document.getElementById("pl-confirmar").value;
+  const errEl     = document.getElementById("pl-error");
+  const btn       = document.getElementById("pl-btn");
+
+  errEl.classList.remove("visible");
+  if (!nueva || !confirmar) {
+    errEl.textContent = "Ingresa y confirma la nueva contraseña.";
+    errEl.classList.add("visible"); return;
+  }
+  if (nueva !== confirmar) {
+    errEl.textContent = "Las contraseñas no coinciden.";
+    errEl.classList.add("visible"); return;
+  }
+  if (nueva.length < 6) {
+    errEl.textContent = "La nueva contraseña debe tener al menos 6 caracteres.";
+    errEl.classList.add("visible"); return;
+  }
+  if (actual && nueva === actual) {
+    errEl.textContent = "La nueva contraseña debe ser diferente a la temporal.";
+    errEl.classList.add("visible"); return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px"></div> Guardando...';
+
+  const r = await api("cambiar_password", { passwordActual: actual, passwordNueva: nueva });
+
+  if (!r.ok) {
+    errEl.textContent = r.error || "Error al cambiar contraseña.";
+    errEl.classList.add("visible");
+    btn.disabled = false;
+    btn.innerHTML = "Guardar y continuar";
+    return;
+  }
+
+  cerrarModal("modal-primer-login");
+  const areasR = await api("get_areas");
+  if (areasR.ok) STATE.areasDisponibles = areasR.areas;
+  _guardarSesion();
+  iniciarApp();
+}
+
+// ── LOGIN CON GOOGLE — usa Supabase Auth OAuth (redirección) ─────────────────
+async function handleLoginGoogle() {
+  const errEl = document.getElementById("login-error");
+  const btn   = document.getElementById("login-google-btn");
+  errEl.classList.remove("visible");
+
+  const _GOOGLE_SVG = '<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/><path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>';
+
+  if (!_initSupabase()) {
+    errEl.textContent = "Error al cargar el sistema de autenticación. Recarga la página.";
+    errEl.classList.add("visible"); return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></div> Redirigiendo...';
+
+  try {
+    const { error } = await supabaseClient.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.href.split('#')[0] },
+    });
+    if (error) {
+      errEl.textContent = error.message || 'Error al iniciar OAuth con Google.';
+      errEl.classList.add("visible");
+      btn.disabled = false;
+      btn.innerHTML = _GOOGLE_SVG + ' Ingresar con Google';
+    }
+    // Si no hay error, el navegador redirige a Google → Supabase → de vuelta aquí
+    // La sesión se restaura automáticamente en DOMContentLoaded vía getSession()
+  } catch(e) {
+    errEl.textContent = "Error de conexión. Recarga la página.";
+    errEl.classList.add("visible");
+    btn.disabled = false;
+    btn.innerHTML = _GOOGLE_SVG + ' Ingresar con Google';
   }
 }
 
@@ -404,7 +550,7 @@ function rolVista() {
 }
 
 function iniciarApp() {
-  _cargarTokenGmailSesion();
+  _hideSplash();
   document.getElementById("screen-login").classList.remove("active");
   document.getElementById("screen-app").classList.add("active");
 
@@ -452,30 +598,23 @@ const MENUS = {
   SUPERADMIN: [
     { section: "Gestión" },
     { id: "sa-colaboradores", icon: "👥", label: "Colaboradores" },
-    { id: "sa-usuarios",      icon: "🔑", label: "Usuarios" },
-    { section: "Sistema" },
     { id: "sa-global",        icon: "🌐", label: "Vista Global" },
+    { section: "Sistema" },
     { id: "sa-config",        icon: "⚙️", label: "Configuración" },
-    { id: "sa-logs",          icon: "📋", label: "Auditoría" },
-    { section: "Herramientas" },
     { id: "verificacion",     icon: "🔍", label: "Verificar Código" },
     { section: "Mi paz y salvo" },
     { id: "mi-estado",        icon: "👤", label: "Mi Estado" },
     { id: "solicitud-th",     icon: "📤", label: "Enviar Paz y Salvo" }
   ],
-  // ADMIN_COMBINED: superadmin que además gestiona áreas (tiene cuentas ADMIN con mismo email)
   ADMIN_COMBINED: [
     { section: "Mi área" },
-    { id: "area-colaboradores", icon: "✅", label: "Colaboradores" },
+    { id: "area-colaboradores", icon: "✅", label: "Aprobar / Rechazar" },
     { id: "admin-config",       icon: "⚙️", label: "Config. área" },
     { section: "Gestión global" },
     { id: "sa-colaboradores",   icon: "👥", label: "Colaboradores" },
-    { id: "sa-usuarios",        icon: "🔑", label: "Usuarios" },
-    { section: "Sistema" },
     { id: "sa-global",          icon: "🌐", label: "Vista Global" },
+    { section: "Sistema" },
     { id: "sa-config",          icon: "⚙️", label: "Configuración" },
-    { id: "sa-logs",            icon: "📋", label: "Auditoría" },
-    { section: "Herramientas" },
     { id: "verificacion",       icon: "🔍", label: "Verificar Código" },
     { section: "Mi paz y salvo" },
     { id: "mi-estado",          icon: "👤", label: "Mi Estado" },
@@ -494,7 +633,26 @@ function buildSidebar(rv) {
   }).join("");
 }
 
+function toggleSidebar() {
+  const sidebar = document.getElementById("sidebar");
+  const overlay = document.getElementById("sidebar-overlay");
+  const btn     = document.getElementById("btn-hamburger");
+  const isOpen  = sidebar.classList.contains("open");
+  sidebar.classList.toggle("open", !isOpen);
+  overlay.classList.toggle("active", !isOpen);
+  btn.classList.toggle("open", !isOpen);
+}
+
+function closeSidebar() {
+  document.getElementById("sidebar").classList.remove("open");
+  document.getElementById("sidebar-overlay").classList.remove("active");
+  const btn = document.getElementById("btn-hamburger");
+  if (btn) btn.classList.remove("open");
+}
+
 function navigateTo(panelId) {
+  closeSidebar();
+
   document.querySelectorAll(".sidebar-item").forEach(el => el.classList.remove("active"));
   const navEl = document.getElementById(`nav-${panelId}`);
   if (navEl) navEl.classList.add("active");
@@ -591,16 +749,7 @@ async function loadMiEstado() {
         `).join("")}
       </div>
     </div>
-    ${pazYSalvoCompleto ? `
-      <div style="margin-top:1.5rem; display:flex; gap:0.75rem; justify-content:center; flex-wrap:wrap">
-        <button class="btn btn-success btn-lg" onclick="descargarDocumento('${colaborador.id}')">
-          📄 Ver Paz y Salvo
-        </button>
-        <button class="btn btn-ghost btn-lg" onclick="descargarDocumentoImprimir('${colaborador.id}')">
-          ⬇️ Descargar PDF
-        </button>
-      </div>
-    ` : requierePazSalvo ? `
+    ${!pazYSalvoCompleto && requierePazSalvo ? `
       <div style="margin-top:1.25rem; text-align:center">
         <button class="btn btn-ghost" onclick="enviarRecordatorioPropio('${colaborador.cedula}')">
           📧 Recordar a áreas pendientes
@@ -716,12 +865,28 @@ async function enviarSolicitudTH() {
   const cedula = window._thCedula || STATE.cedulaPropia || STATE.username;
   const ok = await confirm(
     "Confirmar envío",
-    "¿Enviar tu paz y salvo finalizado al área de Talento Humano? Esta acción generará un correo oficial.",
+    "¿Enviar tu paz y salvo finalizado al área de Talento Humano? Esta acción generará un correo oficial con el acta adjunta.",
     "Enviar", false
   );
   if (!ok) return;
 
-  const r = await api("enviar_solicitud_th", { cedula });
+  // Paso 1: obtener datos del documento verificados desde el servidor (sin enviar correo)
+  toast("Preparando acta...", "info");
+  const prep = await api("enviar_solicitud_th", { cedula, preview: true });
+  if (!prep.ok) { toast(prep.error || "Error preparando el documento.", "error"); return; }
+  if (!prep.datos) { toast("El servidor no devolvió datos del documento.", "error"); return; }
+
+  // Paso 2: generar PDF usando la función oficial (mismo resultado que descarga individual)
+  let pdfBase64 = null;
+  try {
+    pdfBase64 = await _generarPdfClienteSide(prep.datos);
+  } catch(e) {
+    console.error("Error generando PDF para adjunto:", e);
+    toast("No se pudo generar el PDF (" + (e.message || e) + "). Se enviará el correo sin adjunto.", "warning", 5000);
+  }
+
+  // Paso 3: enviar correo con PDF adjunto (mismo PDF que se descargaría individualmente)
+  const r = await api("enviar_solicitud_th", { cedula, pdfBase64 });
   const msgEl = document.getElementById("th-enviado-msg");
 
   if (r.ok) {
@@ -827,20 +992,20 @@ function renderAreaTable() {
       <thead><tr>
         <th class="col-check">
           <input type="checkbox" class="cb-custom" id="admin-cb-all"
-            ${allSelected ? "checked" : ""} onchange="toggleAdminSelectAll(this.checked, ${JSON.stringify(lista.map(c=>c.id))})">
+            ${allSelected ? "checked" : ""} onchange="toggleAdminSelectAll(this.checked)">
         </th>
         <th>Nombre</th><th>Cédula</th><th>Estado</th><th>Aprobado por</th><th>Acción</th>
       </tr></thead>
       <tbody>
         ${lista.map(c => `
           <tr class="${STATE.adminSelectedIds.has(c.id) ? "row-selected" : ""}">
-            <td><input type="checkbox" class="cb-custom" ${STATE.adminSelectedIds.has(c.id) ? "checked" : ""}
+            <td data-label=""><input type="checkbox" class="cb-custom" ${STATE.adminSelectedIds.has(c.id) ? "checked" : ""}
               onchange="toggleAdminSelect('${c.id}', this.checked)"></td>
-            <td>${c.nombre}</td>
-            <td><span style="font-family:var(--font-mono); font-size:0.82rem">${c.cedula}</span></td>
-            <td><span class="badge badge-${c.estado.toLowerCase()}">${c.estado}</span></td>
-            <td style="color:var(--text2); font-size:0.82rem">${c.aprobadoPor || "—"}</td>
-            <td><button class="btn btn-ghost btn-sm" onclick="abrirGestionar('${c.id}')">Gestionar</button></td>
+            <td data-label="Nombre">${c.nombre}</td>
+            <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${c.cedula}</span></td>
+            <td data-label="Estado"><span class="badge badge-${c.estado.toLowerCase()}">${c.estado}</span></td>
+            <td data-label="Aprobado" style="color:var(--text2); font-size:0.82rem">${c.aprobadoPor || "—"}</td>
+            <td data-label="Acción"><button class="btn btn-ghost btn-sm" onclick="abrirGestionar('${c.id}')">Gestionar</button></td>
           </tr>
         `).join("")}
       </tbody>
@@ -855,8 +1020,14 @@ function toggleAdminSelect(id, checked) {
   renderAreaTable();
 }
 
-function toggleAdminSelectAll(checked, ids) {
-  ids.forEach(id => { if (checked) STATE.adminSelectedIds.add(id); else STATE.adminSelectedIds.delete(id); });
+function toggleAdminSelectAll(checked) {
+  const search = document.getElementById("area-search").value.toLowerCase();
+  let lista = STATE.areaColaboradores;
+  if (STATE.areaFilter !== "todos") lista = lista.filter(c => c.estado === STATE.areaFilter);
+  if (search) lista = lista.filter(c =>
+    c.nombre.toLowerCase().includes(search) || String(c.cedula).includes(search)
+  );
+  lista.forEach(c => { if (checked) STATE.adminSelectedIds.add(c.id); else STATE.adminSelectedIds.delete(c.id); });
   updateAdminBulkBar();
   renderAreaTable();
 }
@@ -907,13 +1078,16 @@ async function abrirGestionar(colabId) {
     <div class="modal-info-row"><span class="modal-info-label">Cédula</span><span class="modal-info-value" style="font-family:var(--font-mono)">${c.cedula}</span></div>
     <div class="modal-info-row"><span class="modal-info-label">Estado en tu área</span><span><span class="badge badge-${c.estado.toLowerCase()}">${c.estado}</span></span></div>
     ${c.observaciones ? `<div class="modal-info-row"><span class="modal-info-label">Observaciones</span><span style="color:var(--red); font-size:0.85rem">${c.observaciones}</span></div>` : ""}
+    ${STATE.rol === "SUPERADMIN" ? `
     <div id="gestionar-areas-estado" style="margin-top:1rem">
       <div style="font-size:0.78rem; color:var(--text3); padding:0.5rem 0">Cargando estado general...</div>
-    </div>
+    </div>` : ""}
   `;
   document.getElementById("modal-obs-group").style.display = "none";
   document.getElementById("modal-observaciones").value     = "";
   abrirModal("modal-gestionar");
+
+  if (STATE.rol !== "SUPERADMIN") return;
 
   const r = await api("get_estado_colaborador", { colaboradorId: colabId });
   const box = document.getElementById("gestionar-areas-estado");
@@ -987,10 +1161,10 @@ async function cambiarPasswordAdmin() {
   const actual    = document.getElementById("admin-pw-actual").value;
   const nueva     = document.getElementById("admin-pw-nueva").value;
   const confirmar = document.getElementById("admin-pw-confirmar").value;
-  if (!actual || !nueva || !confirmar) { toast("Completa todos los campos", "error"); return; }
+  if (!nueva || !confirmar) { toast("Ingresa y confirma la nueva contraseña", "error"); return; }
   if (nueva !== confirmar) { toast("Las contraseñas nuevas no coinciden", "error"); return; }
   if (nueva.length < 6)   { toast("La nueva contraseña debe tener al menos 6 caracteres", "error"); return; }
-  const r = await api("cambiar_password", { passwordActual: actual, passwordNueva: nueva });
+  const r = await api("cambiar_password", { passwordNueva: nueva });
   if (r.ok) {
     toast(r.mensaje, "success");
     document.getElementById("admin-pw-actual").value = "";
@@ -1039,13 +1213,13 @@ function renderSAColaboradoresTable() {
           const tipoColor = { DOCENTE: "var(--blue)", ADMINISTRATIVO: "var(--green)", SERVICIOS: "var(--yellow)" }[c.tipoColaborador] || "var(--text2)";
           return `
           <tr class="${STATE.saSelectedIds.has(c.id) ? "row-selected" : ""}">
-            <td><input type="checkbox" class="cb-custom" ${STATE.saSelectedIds.has(c.id) ? "checked" : ""}
+            <td data-label=""><input type="checkbox" class="cb-custom" ${STATE.saSelectedIds.has(c.id) ? "checked" : ""}
               onchange="toggleSASelect('${c.id}', this.checked)"></td>
-            <td>${c.nombre}</td>
-            <td><span style="font-family:var(--font-mono); font-size:0.82rem">${c.cedula}</span></td>
-            <td style="font-size:0.8rem; color:${tipoColor}">${tipoLabel}</td>
-            <td><span class="badge badge-${c.estadoGeneral === "COMPLETO" ? "aprobado" : "pendiente"}">${c.estadoGeneral}</span></td>
-            <td>
+            <td data-label="Nombre">${c.nombre}</td>
+            <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${c.cedula}</span></td>
+            <td data-label="Tipo" style="font-size:0.8rem; color:${tipoColor}">${tipoLabel}</td>
+            <td data-label="Estado"><span class="badge badge-${c.estadoGeneral === "COMPLETO" ? "aprobado" : "pendiente"}">${c.estadoGeneral}</span></td>
+            <td data-label="P&S">
               <label class="switch-wrap">
                 <label class="switch">
                   <input type="checkbox" ${c.requierePazSalvo ? "checked" : ""} onchange="togglePazSalvo('${c.id}', this.checked)">
@@ -1054,10 +1228,11 @@ function renderSAColaboradoresTable() {
                 <span style="font-size:0.8rem; color:var(--text2)">${c.requierePazSalvo ? "Sí" : "No"}</span>
               </label>
             </td>
-            <td><span class="badge ${c.activo ? "badge-aprobado" : "badge-inactivo"}">${c.activo ? "Activo" : "Inactivo"}</span></td>
-            <td style="display:flex; gap:6px; flex-wrap:wrap">
-              <button class="btn btn-ghost btn-sm" onclick="abrirModalEditarColaborador('${c.id}','${escapedNombre}','${c.cedula}',${c.activo},'${c.tipoColaborador || ""}','${c.nivelEducativo || ""}','${escapedAreasReq}')">Editar</button>
-              ${c.tieneDocumento ? `<button class="btn btn-success btn-sm" onclick="descargarDocumento('${c.id}')">📄 PS</button>` : ""}
+            <td data-label="Activo"><span class="badge ${c.activo ? "badge-aprobado" : "badge-inactivo"}">${c.activo ? "Activo" : "Inactivo"}</span></td>
+            <td data-label="Acciones">
+              <div style="display:flex; gap:6px; flex-wrap:wrap">
+                <button class="btn btn-ghost btn-sm" onclick="abrirModalEditarColaborador('${c.id}','${escapedNombre}','${c.cedula}',${c.activo},'${c.tipoColaborador || ""}','${c.nivelEducativo || ""}','${escapedAreasReq}')">Editar</button>
+              </div>
             </td>
           </tr>`;
         }).join("")}
@@ -1510,19 +1685,22 @@ async function loadSAUsuarios() {
           const escapedEmail = (u.email || "").replace(/'/g, "\\'");
           const escapedCed   = (u.cedula || "").replace(/'/g, "\\'");
           return `<tr>
-            <td style="font-weight:500">${u.username}</td>
-            <td><span class="badge ${u.rol==="SUPERADMIN" ? "" : u.rol==="ADMIN" ? "badge-aprobado" : "badge-pendiente"}"
+            <td data-label="Usuario" style="font-weight:500">${u.username}</td>
+            <td data-label="Rol"><span class="badge ${u.rol==="SUPERADMIN" ? "" : u.rol==="ADMIN" ? "badge-aprobado" : "badge-pendiente"}"
               style="${u.rol==="SUPERADMIN" ? "background:rgba(139,92,246,0.15);color:#c4b5fd" : ""}">
               ${u.rol}
             </span></td>
-            <td style="font-size:0.85rem">${areasLabel}</td>
-            <td style="font-size:0.8rem; color:var(--text2)">${u.email || "—"}</td>
-            <td style="font-size:0.8rem; color:var(--text2)">${u.cedula || "—"}</td>
-            <td><span class="badge ${u.activo ? "badge-aprobado" : "badge-inactivo"}">${u.activo ? "Activo" : "Inactivo"}</span></td>
-            <td>
-              ${u.rol !== "SUPERADMIN"
-                ? `<button class="btn btn-ghost btn-sm" onclick="abrirModalEditarUsuario('${u.id}','${escapedArea}',${u.activo},'${escapedEmail}','${escapedCed}')">Editar</button>`
-                : '<span style="color:var(--text3); font-size:0.8rem">—</span>'}
+            <td data-label="Área" style="font-size:0.85rem">${areasLabel}</td>
+            <td data-label="Correo" style="font-size:0.8rem; color:var(--text2)">${u.email || "—"}</td>
+            <td data-label="Cédula" style="font-size:0.8rem; color:var(--text2)">${u.cedula || "—"}</td>
+            <td data-label="Estado"><span class="badge ${u.activo ? "badge-aprobado" : "badge-inactivo"}">${u.activo ? "Activo" : "Inactivo"}</span></td>
+            <td data-label="Acciones">
+              <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
+                ${u.rol !== "SUPERADMIN"
+                  ? `<button class="btn btn-ghost btn-sm" onclick="abrirModalEditarUsuario('${u.id}','${escapedArea}',${u.activo},'${escapedEmail}','${escapedCed}')">Editar</button>
+                     <button class="btn btn-ghost btn-sm" style="color:var(--yellow)" onclick="resetearPasswordUsuario('${u.id}','${u.username}')">🔑 Resetear</button>`
+                  : '<span style="color:var(--text3); font-size:0.8rem">—</span>'}
+              </div>
             </td>
           </tr>`;
         }).join("")}
@@ -1624,6 +1802,18 @@ async function guardarUsuario() {
   document.getElementById("user-username").disabled = false;
 }
 
+async function resetearPasswordUsuario(id, username) {
+  const nuevaPassword = prompt(`Ingresa la nueva contraseña para "${username}" (mín. 6 caracteres).\n\nTip: usa la cédula del colaborador para que sea fácil de recordar.`);
+  if (!nuevaPassword) return;
+  if (nuevaPassword.length < 6) { toast("La contraseña debe tener al menos 6 caracteres", "error"); return; }
+  const ok = await confirm("Restablecer contraseña", `¿Restablecer la contraseña de "${username}"? Esto también reactivará la cuenta si estaba inactiva.`, "Restablecer");
+  if (!ok) return;
+  const r = await api("resetear_password", { id, nuevaPassword });
+  if (r.ok) toast(r.mensaje, "success");
+  else toast(r.error, "error");
+  loadSAUsuarios();
+}
+
 // ═══════════════════════════════════════════════════════
 // SUPER ADMIN — CONFIGURACIÓN
 // ═══════════════════════════════════════════════════════
@@ -1673,6 +1863,19 @@ async function loadSAConfig() {
         <button class="btn btn-danger" onclick="ejecutarRepararIds()" id="btn-reparar-ids" style="display:none">🔧 Reparar IDs automáticamente</button>
       </div>
       <div id="diagnostico-resultado" style="margin-top:1rem"></div>
+    </div>
+    <div class="config-card" style="margin-top:1.5rem">
+      <div class="config-card-header" style="margin-bottom:0.75rem">
+        <div>
+          <div class="config-card-title">Diagnóstico de jefes de área</div>
+          <div class="config-card-desc">Verifica que cada administrador tenga AREA_ID válido, EMAIL y CÉDULA correctamente configurados. La CÉDULA es necesaria para que el sistema marque sus propias áreas como OMITIDO en su paz y salvo. Úsalo para diagnosticar por qué Andrea, David u otros admins no son reconocidos.</div>
+        </div>
+      </div>
+      <div style="display:flex; gap:0.75rem; flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="ejecutarDiagnosticoAdmins()" style="border-color:rgba(251,191,36,0.5);color:#fbbf24">🔍 Diagnosticar jefes de área</button>
+        <button class="btn btn-danger" onclick="ejecutarReparacionAdmins()" id="btn-reparar-admins" style="display:none">🔧 Reparar automáticamente</button>
+      </div>
+      <div id="diagnostico-admins-resultado" style="margin-top:1rem"></div>
     </div>
     <div class="config-card" style="margin-top:1.5rem">
       <div class="config-card-header" style="margin-bottom:0.75rem">
@@ -1749,7 +1952,72 @@ async function loadSAConfig() {
       <button class="btn btn-ghost" onclick="ejecutarMigracionTipoAreas()" style="border-color:rgba(168,85,247,0.5);color:#c084fc">⚡ Clasificar áreas GENERAL / DEPARTAMENTAL</button>
       <div id="tipo-areas-migration-resultado" style="margin-top:1rem"></div>
     </div>
+    <div class="config-card" style="margin-top:1.5rem">
+      <div class="config-card-header" style="margin-bottom:0.75rem">
+        <div>
+          <div class="config-card-title">Crear nueva área</div>
+          <div class="config-card-desc">
+            Agrega un área personalizada al sistema (ej. <strong>Marketing y Diseño</strong>).<br>
+            Después de crearla, ve a <strong>SA → Usuarios → editar el admin</strong> correspondiente y asígnale el ID del área nueva.
+          </div>
+        </div>
+      </div>
+      <div style="display:grid; gap:0.75rem; max-width:480px">
+        <div>
+          <label style="font-size:0.82rem; color:var(--text2); display:block; margin-bottom:0.25rem">Nombre del área <span style="color:var(--red)">*</span></label>
+          <input id="nueva-area-nombre" class="input" type="text" placeholder="Ej: Marketing y Diseño">
+        </div>
+        <div>
+          <label style="font-size:0.82rem; color:var(--text2); display:block; margin-bottom:0.25rem">Descripción (opcional)</label>
+          <input id="nueva-area-desc" class="input" type="text" placeholder="Breve descripción del área">
+        </div>
+        <div>
+          <label style="font-size:0.82rem; color:var(--text2); display:block; margin-bottom:0.25rem">Tipo</label>
+          <select id="nueva-area-tipo" class="input">
+            <option value="GENERAL">GENERAL — requerida para todos los colaboradores</option>
+            <option value="DEPARTAMENTAL">DEPARTAMENTAL — solo para docentes del área</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" onclick="crearNuevaArea()" style="width:fit-content">+ Crear área</button>
+      </div>
+      <div id="nueva-area-resultado" style="margin-top:1rem"></div>
+    </div>
   `;
+}
+
+async function crearNuevaArea() {
+  const nombre = (document.getElementById("nueva-area-nombre").value || "").trim();
+  const desc   = (document.getElementById("nueva-area-desc").value   || "").trim();
+  const tipo   = document.getElementById("nueva-area-tipo").value;
+  const el     = document.getElementById("nueva-area-resultado");
+
+  if (!nombre) { toast("El nombre del área es obligatorio", "error"); return; }
+
+  el.innerHTML = `<div class="empty-state" style="padding:0.5rem"><span class="loading-spinner"></span> Creando...</div>`;
+  const r = await api("crear_area", { nombre, descripcion: desc, tipo });
+
+  if (!r.ok) {
+    el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`;
+    return;
+  }
+
+  el.innerHTML = `
+    <div class="alert-banner success">
+      <span>✅</span>
+      <div>
+        <strong>${r.mensaje}</strong><br>
+        <span style="font-size:0.82rem; color:var(--text2)">
+          Tipo: <strong>${r.tipo}</strong> &nbsp;|&nbsp; ID: <code style="font-size:0.78rem">${r.id}</code>
+        </span><br>
+        <span style="font-size:0.82rem; margin-top:0.25rem; display:block">
+          Próximo paso: ve a <strong>SA → Usuarios</strong>, edita el administrador del área y pega ese ID en el campo <strong>AREA_ID</strong>.
+        </span>
+      </div>
+    </div>`;
+
+  document.getElementById("nueva-area-nombre").value = "";
+  document.getElementById("nueva-area-desc").value   = "";
+  toast(r.mensaje, "success");
 }
 
 async function ejecutarMigracionAreas() {
@@ -1901,6 +2169,7 @@ async function guardarEmailTH() {
   else toast(r.error, "error");
 }
 
+
 // guardarEmailsNotificacionSA fue reemplazado por guardarEmailAdmin(userId)
 // que guarda el correo de cada Admin individualmente.
 
@@ -1982,14 +2251,103 @@ async function ejecutarRepararIds() {
   toast(r.mensaje, "success");
 }
 
+async function ejecutarDiagnosticoAdmins() {
+  const el = document.getElementById("diagnostico-admins-resultado");
+  el.innerHTML = `<div class="empty-state" style="padding:0.5rem"><span class="loading-spinner"></span> Analizando admins...</div>`;
+  const r = await api("diagnosticar_admins", {});
+  if (!r.ok) { el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`; return; }
+
+  const s = r.resumen;
+  const hayProblema = s.conProblemas > 0 || s.areasSinAdmin > 0;
+
+  const filas = (r.admins || []).map(a => {
+    const issues = a.issues.length
+      ? `<ul style="margin:0.25rem 0 0 1rem; color:var(--red); font-size:0.78rem">${a.issues.map(i => `<li>${i}</li>`).join("")}</ul>`
+      : "";
+    return `
+      <tr style="${a.ok ? "" : "background:rgba(239,68,68,0.06)"}">
+        <td><strong>${a.username}</strong>${issues}</td>
+        <td style="font-size:0.78rem; color:var(--text2)">${a.areaNombres || "<span style='color:var(--red)'>—</span>"}</td>
+        <td style="font-size:0.78rem; color:var(--text2)">${a.cedula || "<span style='color:var(--red)'>—</span>"}</td>
+        <td style="font-size:0.78rem; color:var(--text2)">${a.colabNombre || "<span style='color:var(--yellow)'>No encontrado</span>"}</td>
+        <td><span class="badge ${a.ok ? "badge-aprobado" : "badge-rechazado"}">${a.ok ? "✓ OK" : "⚠ Problema"}</span></td>
+      </tr>`;
+  }).join("");
+
+  const sinAdminHtml = r.areasSinAdmin && r.areasSinAdmin.length
+    ? `<div style="margin-top:0.75rem; font-size:0.82rem; color:var(--yellow)">
+        Áreas sin administrador asignado: <strong>${r.areasSinAdmin.map(a => a.nombre).join(", ")}</strong>
+       </div>`
+    : "";
+
+  el.innerHTML = `
+    <div class="alert-banner ${hayProblema ? "warning" : ""}" style="margin-bottom:0.75rem">
+      <span>${hayProblema ? "⚠️" : "✅"}</span>
+      <div><strong>${hayProblema ? s.conProblemas + " admin(s) con problemas de configuración" : "Todos los admins están correctamente configurados"}</strong></div>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="table" style="font-size:0.82rem; margin-bottom:0">
+        <thead><tr><th>Admin / Problemas</th><th>Área(s)</th><th>Cédula en USUARIOS</th><th>Colaborador vinculado</th><th>Estado</th></tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>
+    ${sinAdminHtml}
+    ${hayProblema ? `<div style="margin-top:0.75rem; font-size:0.78rem; color:var(--text2)">
+      Haz clic en <strong>🔧 Reparar automáticamente</strong> para que el sistema cree las áreas faltantes y corrija los AREA_IDs.<br>
+      Los admins con username no estándar deberán corregirse manualmente en SA → Usuarios.
+    </div>` : ""}
+  `;
+
+  document.getElementById("btn-reparar-admins").style.display = hayProblema ? "inline-flex" : "none";
+}
+
+async function ejecutarReparacionAdmins() {
+  const ok = await confirm(
+    "Reparar configuración de admins",
+    "El sistema hará lo siguiente:\n• Creará las áreas faltantes en la hoja AREAS\n• Actualizará el AREA_ID de cada admin según su username\n\nNo se modificarán cédulas ni contraseñas. ¿Continuar?",
+    "Reparar", true
+  );
+  if (!ok) return;
+
+  const el = document.getElementById("diagnostico-admins-resultado");
+  el.innerHTML = `<div class="empty-state" style="padding:0.5rem"><span class="loading-spinner"></span> Reparando...</div>`;
+  const r = await api("diagnosticar_y_reparar_admins", {});
+  if (!r.ok) { el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`; return; }
+
+  const reparadosHtml = (r.reparados || []).map(x =>
+    `<li><strong>${x.username}</strong> → ${x.areaNombre}${x.areaCreada ? " <span style='color:var(--green)'>(área creada)</span>" : " <span style='color:var(--text2)'>(ID corregido)</span>"}</li>`
+  ).join("");
+
+  const manualesHtml = (r.manuales || []).map(x =>
+    `<li><strong>${x.username}</strong>: ${x.problema}</li>`
+  ).join("");
+
+  el.innerHTML = `
+    <div class="alert-banner" style="margin-bottom:0.75rem">
+      <span>✅</span>
+      <div><strong>${r.mensaje}</strong></div>
+    </div>
+    ${reparadosHtml ? `<div style="font-size:0.82rem; margin-bottom:0.5rem; color:var(--text2)">Reparados:</div>
+      <ul style="font-size:0.82rem; margin:0 0 0.75rem 1rem">${reparadosHtml}</ul>` : ""}
+    ${manualesHtml ? `<div style="font-size:0.82rem; margin-bottom:0.25rem; color:var(--yellow)">Requieren corrección manual:</div>
+      <ul style="font-size:0.82rem; margin:0 0 0 1rem; color:var(--yellow)">${manualesHtml}</ul>` : ""}
+    ${r.reparados && r.reparados.length ? `<div style="margin-top:0.75rem; font-size:0.78rem; color:var(--text2)">
+      Próximo paso: editar cada admin reparado en SA → Usuarios y asignar su <strong>CÉDULA</strong> para activar la lógica OMITIDO en su paz y salvo.
+    </div>` : ""}
+  `;
+
+  document.getElementById("btn-reparar-admins").style.display = "none";
+  toast(r.mensaje, "success");
+}
+
 async function cambiarPasswordSA() {
   const actual    = document.getElementById("sa-pw-actual").value;
   const nueva     = document.getElementById("sa-pw-nueva").value;
   const confirmar = document.getElementById("sa-pw-confirmar").value;
-  if (!actual || !nueva || !confirmar) { toast("Completa todos los campos", "error"); return; }
+  if (!nueva || !confirmar) { toast("Ingresa y confirma la nueva contraseña", "error"); return; }
   if (nueva !== confirmar) { toast("Las contraseñas nuevas no coinciden", "error"); return; }
   if (nueva.length < 6)   { toast("La nueva contraseña debe tener al menos 6 caracteres", "error"); return; }
-  const r = await api("cambiar_password", { passwordActual: actual, passwordNueva: nueva });
+  const r = await api("cambiar_password", { passwordNueva: nueva });
   if (r.ok) {
     toast(r.mensaje, "success");
     ["sa-pw-actual","sa-pw-nueva","sa-pw-confirmar"].forEach(id => document.getElementById(id).value = "");
@@ -2005,71 +2363,350 @@ async function loadSAGlobal() {
   const r = await api("get_vista_global");
   if (!r.ok) { container.innerHTML = `<div class="empty-state"><h3>${r.error}</h3></div>`; return; }
 
+  STATE._vgData    = r;
+  STATE._vgFiltros = { status: "todos", areaId: "" };
+
   const { colaboradores, areas } = r;
-  const total    = colaboradores.length;
-  const completos = colaboradores.filter(c => c.estadoGeneral === "COMPLETO").length;
+  const lista      = colaboradores.filter(c => c.requierePazSalvo);
+  const total      = lista.length;
+  const nAdmin     = lista.filter(c => c.tipoColaborador === "ADMINISTRATIVO").length;
+  const nServ      = lista.filter(c => c.tipoColaborador === "SERVICIOS").length;
+  const nDoc       = lista.filter(c => c.tipoColaborador === "DOCENTE").length;
+  const completos  = lista.filter(c => c.estadoGeneral === "COMPLETO").length;
+  const enProceso  = total - completos;
 
   container.innerHTML = `
-    <div class="stats-row" style="margin-bottom:1.5rem">
+    <div class="stats-row" style="margin-bottom:1.25rem">
       <div class="stat-card"><div class="stat-label">Total</div><div class="stat-value">${total}</div></div>
       <div class="stat-card green"><div class="stat-label" style="color:var(--green)">Completos</div><div class="stat-value" style="color:var(--green)">${completos}</div></div>
-      <div class="stat-card"><div class="stat-label" style="color:var(--yellow)">En proceso</div><div class="stat-value" style="color:var(--yellow)">${total - completos}</div></div>
+      <div class="stat-card"><div class="stat-label" style="color:var(--yellow)">En proceso</div><div class="stat-value" style="color:var(--yellow)">${enProceso}</div></div>
     </div>
-    <div class="table-container">
+
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:center">
+      <select id="vg-tipo-filter" onchange="filtrarVG(this.value)"
+        style="padding:5px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);
+               color:var(--text1);font-size:0.82rem;cursor:pointer">
+        <option value="todos">Todos (${total})</option>
+        <option value="ADMINISTRATIVO">Administrativos (${nAdmin})</option>
+        <option value="DOCENTE">Académicos (${nDoc})</option>
+        <option value="SERVICIOS">Servicios (${nServ})</option>
+      </select>
+      <button class="btn btn-ghost btn-sm" onclick="loadSAGlobal()" style="margin-left:auto">↻</button>
+    </div>
+
+    <div id="vg-table-wrap"></div>
+  `;
+
+  renderVGTable();
+}
+
+function filtrarVG(status) {
+  STATE._vgFiltros = { ...(STATE._vgFiltros || {}), status, areaId: "" };
+  renderVGTable();
+}
+
+function renderVGTable() {
+  const wrap = document.getElementById("vg-table-wrap");
+  if (!wrap || !STATE._vgData) return;
+
+  const { colaboradores, areas } = STATE._vgData;
+  const { status, areaId } = STATE._vgFiltros || {};
+
+  let lista = colaboradores.filter(c => c.requierePazSalvo);
+  if (status && status !== "todos") lista = lista.filter(c => c.tipoColaborador === status);
+
+  const areasVis = areaId ? areas.filter(a => String(a.id) === String(areaId)) : areas;
+  if (areaId) {
+    lista = lista.filter(c => c.estadoPorArea.some(a =>
+      String(a.areaId) === String(areaId) && a.estado !== "NO_APLICA"
+    ));
+  }
+
+  if (!lista.length) {
+    wrap.innerHTML = '<div class="empty-state" style="padding:2rem"><h3>Sin resultados para este filtro</h3></div>';
+    return;
+  }
+
+  const completosVisibles = lista.filter(c => c.estadoGeneral === "COMPLETO");
+  const selCount = completosVisibles.filter(c => STATE._vgSelected.has(c.id)).length;
+  const allSel   = completosVisibles.length > 0 && completosVisibles.every(c => STATE._vgSelected.has(c.id));
+
+  const bulkBar = selCount > 0 ? `
+    <div class="vg-bulk-bar">
+      <span class="vg-bulk-count">${selCount} seleccionado(s)</span>
+      <button class="btn btn-primary btn-sm" onclick="descargarSeleccionadosVG()">📥 Descargar seleccionados</button>
+      <button class="btn btn-ghost btn-sm" onclick="limpiarSeleccionVG()">✕ Limpiar</button>
+    </div>
+  ` : "";
+
+  wrap.innerHTML = bulkBar + `
+    <div class="table-container mobile-scroll">
       <table class="table global-table">
         <thead><tr>
+          <th class="col-check" title="Seleccionar todos los completados">
+            <input type="checkbox" class="cb-custom"
+              ${allSel && completosVisibles.length > 0 ? "checked" : ""}
+              ${completosVisibles.length === 0 ? "disabled" : ""}
+              onchange="toggleVGSelectAll(this.checked)">
+          </th>
           <th class="col-nombre">Nombre</th>
-          ${areas.map(a => `<th class="col-area" title="${a.NOMBRE}">${a.NOMBRE.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,4)}</th>`).join("")}
+          ${areasVis.map(a =>
+            `<th class="col-area" title="${a.nombre}">${a.nombre.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,4)}</th>`
+          ).join("")}
+          <th style="width:80px"></th>
         </tr></thead>
         <tbody>
-          ${colaboradores.filter(c => c.requierePazSalvo).map(c => `
-            <tr class="${c.estadoGeneral==="COMPLETO"?"row-completo":""}">
+          ${lista.map(c => {
+            const esc  = c.nombre.replace(/'/g,"\\'");
+            const done = c.estadoGeneral === "COMPLETO";
+            const sel  = STATE._vgSelected.has(c.id);
+            return `
+            <tr class="${done ? "row-completo" : ""} ${sel ? "row-selected" : ""}">
+              <td class="col-check">
+                ${done ? `<input type="checkbox" class="cb-custom" ${sel ? "checked" : ""}
+                  onchange="toggleVGSelect('${c.id}', this.checked)">` : ""}
+              </td>
               <td class="col-nombre">
                 <div class="global-nombre">${c.nombre}</div>
                 <div class="global-cedula">${c.cedula}</div>
                 <div class="global-acciones">
-                  ${c.estadoGeneral === "COMPLETO"
+                  ${done
                     ? `<span class="badge badge-aprobado" style="font-size:0.65rem">✓ Completo</span>`
-                    : `<span style="font-size:0.7rem; color:var(--text3)">⏳ ${c.pendientes.length} pend.</span>
-                       <button class="btn-icon-action" title="Enviar recordatorio"
-                         onclick="enviarRecordatorio('${c.id}', '${c.nombre.replace(/'/g,"\\'")}')">📧</button>
-                       <button class="btn-icon-action btn-icon-warn" title="Forzar paz y salvo completo"
-                         onclick="forzarPazSalvo('${c.id}', '${c.nombre.replace(/'/g,"\\'")}')">⚡</button>`
-                  }
+                    : `<span style="font-size:0.7rem;color:var(--text3)">⏳ ${c.pendientes.length} pend.</span>`}
                 </div>
               </td>
-              ${c.estadoPorArea.map(a =>
-                `<td class="col-area" title="${a.areaNombre}${a.aprobadoPor ? " · "+a.aprobadoPor : ""}">
-                  <span class="dot-estado dot-${a.estado.toLowerCase()}"></span>
-                </td>`
-              ).join("")}
-            </tr>
-          `).join("")}
+              ${areasVis.map(a => {
+                const ap = c.estadoPorArea.find(x => String(x.areaId) === String(a.id));
+                if (!ap || ap.estado === "NO_APLICA") return `<td class="col-area"></td>`;
+                const tt = ap.areaNombre + (ap.aprobadoPor ? " · "+ap.aprobadoPor : "") + (ap.observaciones ? " · "+ap.observaciones : "");
+                return `<td class="col-area" title="${tt}"><span class="dot-estado dot-${ap.estado.toLowerCase()}"></span></td>`;
+              }).join("")}
+              <td style="text-align:center;white-space:nowrap">
+                ${done
+                  ? `<button class="btn-icon-action" title="Descargar paz y salvo"
+                       onclick="descargaIndividualVG('${c.id}','${esc}')">📥</button>`
+                  : `<button class="btn-icon-action" title="Enviar recordatorio"
+                       onclick="enviarRecordatorio('${c.id}','${esc}')">📧</button>
+                     <button class="btn-icon-action btn-icon-warn" title="Forzar paz y salvo"
+                       onclick="forzarPazSalvo('${c.id}','${esc}')">⚡</button>`
+                }
+              </td>
+            </tr>`;
+          }).join("")}
         </tbody>
       </table>
     </div>
   `;
 }
 
+// ── Selección en Vista Global ─────────────────────────────
+function toggleVGSelect(id, checked) {
+  if (checked) STATE._vgSelected.add(id);
+  else         STATE._vgSelected.delete(id);
+  renderVGTable();
+}
+
+function toggleVGSelectAll(checked) {
+  if (!STATE._vgData) return;
+  const { colaboradores } = STATE._vgData;
+  const { status, areaId } = STATE._vgFiltros || {};
+  let lista = colaboradores.filter(c => c.requierePazSalvo && c.estadoGeneral === "COMPLETO");
+  if (status && status !== "todos") lista = lista.filter(c => c.tipoColaborador === status);
+  if (areaId) lista = lista.filter(c => c.estadoPorArea.some(a => String(a.areaId) === String(areaId) && a.estado !== "NO_APLICA"));
+  lista.forEach(c => { if (checked) STATE._vgSelected.add(c.id); else STATE._vgSelected.delete(c.id); });
+  renderVGTable();
+}
+
+function limpiarSeleccionVG() {
+  STATE._vgSelected = new Set();
+  renderVGTable();
+}
+
+// ── Descarga individual desde Vista Global (con caché) ────
+async function descargaIndividualVG(colaboradorId, nombre) {
+  const cached = STATE._pdfCache[colaboradorId];
+  // Validar caché: descartar si el base64 es muy corto (PDF vacío o corrupto < 5 KB)
+  if (cached && cached.pdfBase64 && cached.pdfBase64.length > 5000) {
+    _dispararDescargaPdf(cached.pdfBase64, cached.filename);
+    toast("PDF descargado.", "success");
+    return;
+  }
+  // Si había entrada inválida en caché, limpiarla
+  if (cached) delete STATE._pdfCache[colaboradorId];
+  toast("Generando PDF...", "info");
+  try {
+    const { b64, filename } = await _generarPdfOficial(colaboradorId);
+    STATE._pdfCache[colaboradorId] = { pdfBase64: b64, filename };
+    _dispararDescargaPdf(b64, filename);
+    toast("PDF descargado.", "success");
+  } catch(e) {
+    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
+  }
+}
+
+// Descarga silenciosa de un base64 PDF
+function _dispararDescargaPdf(b64, filename) {
+  const blob = _base64ToBlob(b64, "application/pdf");
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// ── Descarga masiva con progreso ──────────────────────────
+async function descargarSeleccionadosVG() {
+  const ids = [...STATE._vgSelected];
+  if (!ids.length) { toast("Selecciona al menos un colaborador", "error"); return; }
+
+  const { colaboradores } = STATE._vgData;
+  const paraDescargar = ids
+    .map(id => colaboradores.find(c => c.id === id))
+    .filter(c => c && c.estadoGeneral === "COMPLETO");
+
+  if (!paraDescargar.length) {
+    toast("Los seleccionados no tienen paz y salvo completo", "error"); return;
+  }
+
+  abrirModal("modal-descarga-bulk");
+  document.getElementById("bulk-dl-close-btn").disabled = true;
+  _bulkDlActualizar(0, paraDescargar.length, "Iniciando...", []);
+
+  let ok = 0, fail = 0;
+  const log = [];
+
+  for (let i = 0; i < paraDescargar.length; i++) {
+    const c = paraDescargar[i];
+    _bulkDlActualizar(i, paraDescargar.length, `(${i+1}/${paraDescargar.length}) ${c.nombre}`, log);
+    try {
+      let data = STATE._pdfCache[c.id];
+      // Invalidar caché si el PDF es vacío o muy pequeño
+      if (data && (!data.pdfBase64 || data.pdfBase64.length < 5000)) {
+        delete STATE._pdfCache[c.id];
+        data = null;
+      }
+      if (!data) {
+        const { b64, filename } = await _generarPdfOficial(c.id);
+        data = { pdfBase64: b64, filename };
+        STATE._pdfCache[c.id] = data;
+      }
+      _dispararDescargaPdf(data.pdfBase64, data.filename);
+      ok++;
+      log.push({ nombre: c.nombre, ok: true });
+      // Pausa mínima entre descargas para evitar bloqueo del navegador
+      await new Promise(res => setTimeout(res, 700));
+    } catch(e) {
+      fail++;
+      log.push({ nombre: c.nombre, ok: false, error: e.message });
+    }
+    _bulkDlActualizar(i + 1, paraDescargar.length,
+      `${ok} descargado(s)${fail ? ` · ${fail} error(es)` : ""}`, log);
+  }
+
+  document.getElementById("bulk-dl-close-btn").disabled = false;
+  _bulkDlActualizar(paraDescargar.length, paraDescargar.length,
+    `✓ Finalizado — ${ok} descargado(s)${fail ? ` · ${fail} con error` : ""}`, log);
+}
+
+function _bulkDlActualizar(done, total, status, log) {
+  const pct  = total > 0 ? Math.round((done / total) * 100) : 0;
+  const bar  = document.getElementById("bulk-dl-progress-bar");
+  const stEl = document.getElementById("bulk-dl-status");
+  const logEl= document.getElementById("bulk-dl-log");
+  if (bar)  bar.style.width = pct + "%";
+  if (stEl) stEl.textContent = status;
+  if (logEl) {
+    logEl.innerHTML = log.map(e =>
+      `<div style="font-size:0.77rem;padding:2px 0;color:${e.ok ? "var(--green)" : "var(--red)"}">
+        ${e.ok ? "✓" : "✗"} ${e.nombre}${e.error ? " — " + e.error : ""}
+      </div>`
+    ).join("");
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
 // ═══════════════════════════════════════════════════════
 // RECORDATORIO A ÁREAS PENDIENTES
 // ═══════════════════════════════════════════════════════
+// Abre el modal de selección de áreas para enviar recordatorio (SA/ADMIN).
 async function enviarRecordatorio(colaboradorId, nombre) {
-  const ok = await confirm(
-    "Enviar recordatorio",
-    `Se enviará un correo a los administradores de cada área pendiente de aprobar a <strong>${nombre}</strong>. ¿Continuar?`,
-    "Enviar"
-  );
-  if (!ok) return;
+  await abrirModalRecordatorio({ colaboradorId, nombre });
+}
 
-  const r = await api("enviar_recordatorio", { colaboradorId });
+// Abre el modal de selección de áreas para el propio colaborador.
+async function enviarRecordatorioPropio(cedula) {
+  await abrirModalRecordatorio({ cedula, esCedula: true });
+}
+
+// Carga las áreas pendientes y muestra el modal de selección.
+async function abrirModalRecordatorio({ colaboradorId, cedula, esCedula, nombre }) {
+  const payload = esCedula ? { cedula } : { colaboradorId };
+  const r = await api("get_pendientes_recordatorio", payload);
   if (!r.ok) { toast(r.error, "error"); return; }
 
-  const detalles = r.areasPendientes
-    ? r.areasPendientes.map(a => (a.enviado ? "✓ " : "⚠ ") + a.nombre).join(" · ")
-    : "";
-  toast(r.mensaje + (detalles ? " — " + detalles : ""), "success");
+  if (!r.pendientes.length) {
+    toast("No hay áreas pendientes para notificar", "info"); return;
+  }
 
+  STATE._recCtx = {
+    colaboradorId: r.colaboradorId,
+    cedula,
+    esCedula: !!esCedula,
+    pendientes: r.pendientes
+  };
+
+  document.getElementById("modal-rec-title").textContent =
+    "📧 Recordatorio — " + (r.colaboradorNombre || nombre || "");
+
+  const lista = document.getElementById("modal-rec-lista");
+  lista.innerHTML = r.pendientes.map(p => `
+    <label style="display:flex;align-items:flex-start;gap:0.6rem;padding:8px 10px;
+                  background:var(--surface2);border-radius:8px;cursor:pointer;
+                  ${!p.tieneCorreo ? "opacity:0.65" : ""}">
+      <input type="checkbox" class="rec-check" value="${p.areaId}"
+             ${p.tieneCorreo ? "checked" : "disabled"}
+             style="margin-top:2px;flex-shrink:0">
+      <span style="flex:1;min-width:0">
+        <span style="font-size:0.85rem;font-weight:600;color:var(--text1);display:block">${p.areaNombre}</span>
+        ${p.adminNombre
+          ? `<span style="font-size:0.77rem;color:var(--text2)">${p.adminNombre}</span>`
+          : `<span style="font-size:0.77rem;color:var(--red)">Sin administrador asignado</span>`}
+        ${p.adminEmail
+          ? `<span style="font-size:0.72rem;color:var(--text3);display:block">${p.adminEmail}</span>`
+          : `<span style="font-size:0.72rem;color:var(--red);display:block">⚠ Sin correo registrado — no se enviará</span>`}
+      </span>
+    </label>
+  `).join("");
+
+  // Sincronizar "Seleccionar todas"
+  const allChecked = r.pendientes.every(p => p.tieneCorreo);
+  document.getElementById("rec-check-all").checked = allChecked;
+  document.getElementById("rec-check-all").indeterminate = !allChecked && r.pendientes.some(p => p.tieneCorreo);
+
+  abrirModal("modal-recordatorio");
+}
+
+function toggleTodosRecordatorio(checked) {
+  document.querySelectorAll(".rec-check:not(:disabled)").forEach(cb => { cb.checked = checked; });
+}
+
+async function enviarRecordatorioDesdeModal() {
+  const ctx = STATE._recCtx;
+  if (!ctx) return;
+
+  const areaIds = [...document.querySelectorAll(".rec-check:checked")].map(cb => cb.value);
+  if (!areaIds.length) { toast("Selecciona al menos un área", "error"); return; }
+
+  cerrarModal("modal-recordatorio");
+
+  const payload = ctx.esCedula
+    ? { cedula: ctx.cedula, areaIds }
+    : { colaboradorId: ctx.colaboradorId, areaIds };
+
+  const r = await api("enviar_recordatorio", payload);
+  if (!r.ok) { toast(r.error, "error"); return; }
+
+  toast(r.mensaje, "success");
   if (r.errores && r.errores.length) {
     r.errores.forEach(e => toast("Sin correo: " + e, "error"));
   }
@@ -2091,24 +2728,6 @@ async function forzarPazSalvo(colaboradorId, nombre) {
 
   toast(r.mensaje, "success");
   loadSAGlobal();
-}
-
-// Versión para colaboradores: envían el recordatorio para sí mismos
-async function enviarRecordatorioPropio(cedula) {
-  const ok = await confirm(
-    "Recordar a áreas pendientes",
-    "Se enviará un correo a cada área que aún no ha aprobado tu paz y salvo, pidiéndoles que lo hagan. ¿Continuar?",
-    "Enviar"
-  );
-  if (!ok) return;
-
-  const r = await api("enviar_recordatorio", { cedula });
-  if (!r.ok) { toast(r.error, "error"); return; }
-
-  toast(r.mensaje, "success");
-  if (r.errores && r.errores.length) {
-    r.errores.forEach(e => toast("Sin correo: " + e, "error"));
-  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2153,113 +2772,283 @@ function _base64ToBlob(b64, mime) {
   return new Blob([arr], { type: mime });
 }
 
-// Descarga un PDF como archivo desde base64 del servidor
-async function _descargarPdfDelServidor(colaboradorId, nombre) {
-  toast("Generando PDF...", "info");
-  const r = await api("descargar_pdf", { colaboradorId });
-  if (!r.ok || !r.pdfBase64) {
-    toast(r.error || "Error al generar el PDF.", "error");
-    return null;
+// ─── GENERACIÓN DE CERTIFICADO PDF (client-side, html2pdf.js) ─────────────────
+
+// Construye el HTML del certificado de paz y salvo. Recibe el objeto documento
+// y el logo ya convertido a PNG data-URL (para evitar problemas SVG en html2canvas).
+function _generarHtmlCertificado(doc, logoDataUrl) {
+  const institucion = String(doc.institucion || "Colegio Campestre Goyavier");
+  const logoSrc = logoDataUrl || '';
+  const logoTag = logoSrc
+    ? `<img src="${logoSrc}" style="height:64px;width:auto;object-fit:contain;flex-shrink:0" alt="Logo">`
+    : '';
+
+  const areasHtml = doc.areas && doc.areas.length
+    ? `<div class="areas"><div class="areas-title">DEPENDENCIAS CERTIFICADAS</div><table class="areas-tbl">${
+        doc.areas.map(a =>
+          `<tr><td class="atd-chk">&#10003;</td><td class="atd-nom">${a.nombre}</td>` +
+          `<td class="atd-sep">&mdash;</td><td class="atd-resp">${a.responsableNombre || a.responsable || ''}</td></tr>`
+        ).join('')
+      }</table></div>`
+    : '';
+
+  let fechaFormateada;
+  try {
+    fechaFormateada = new Date(doc.fechaEmision).toLocaleDateString('es-CO', {
+      year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Bogota'
+    });
+  } catch(_) {
+    fechaFormateada = doc.fechaEmision || new Date().toLocaleDateString('es-CO', { year:'numeric', month:'long', day:'numeric' });
   }
-  if (r.documento) { _docActual = r.documento; }
-  return r;
+
+  const css =
+    '*{box-sizing:border-box;margin:0;padding:0}' +
+    '@page{size:8.5in 11in;margin:0}' +
+    'html,body{margin:0;padding:0;width:8.5in}' +
+    'body{font-family:Arial,sans-serif;color:#1a1a2e;background:#fff}' +
+    '.page{width:8.5in;min-height:11in;display:flex;flex-direction:column}' +
+    '.hdr{display:flex;align-items:center;gap:20px;padding:24px 44px 20px;' +
+      'border-bottom:3px solid #1e3a5f;background:#f8faff;flex-shrink:0}' +
+    '.inst{display:flex;flex-direction:column;justify-content:center}' +
+    '.inst-name{font-size:17px;font-weight:700;color:#1e3a5f;text-transform:uppercase;letter-spacing:1px}' +
+    '.inst-sub{font-size:11px;color:#999;margin-top:3px}' +
+    '.title-blk{text-align:center;padding:26px 44px 22px;border-bottom:1px solid #dde4f0;flex-shrink:0}' +
+    '.t-badge{display:inline-block;background:#1e3a5f;color:#fff;font-size:9px;font-weight:700;' +
+      'letter-spacing:2px;text-transform:uppercase;padding:5px 16px;border-radius:20px;margin-bottom:12px}' +
+    '.t-main{font-size:30px;font-weight:700;color:#1e3a5f;letter-spacing:4px;text-transform:uppercase}' +
+    '.t-desc{font-size:10px;color:#bbb;margin-top:8px;letter-spacing:2px;text-transform:uppercase}' +
+    '.body{flex:1;padding:26px 44px 22px;display:flex;flex-direction:column;justify-content:space-between}' +
+    '.intro{font-size:12px;color:#666;text-align:center;margin-bottom:16px}' +
+    '.person{background:#eef3ff;border:2px solid #c5d5f0;border-radius:12px;' +
+      'padding:18px 32px;text-align:center;margin-bottom:16px}' +
+    '.p-name{font-size:23px;font-weight:700;color:#1e3a5f;text-transform:uppercase}' +
+    '.p-cc{font-size:12px;color:#667;margin-top:7px}' +
+    '.cert-txt{font-size:12px;color:#444;line-height:1.9;text-align:justify;margin-bottom:16px}' +
+    '.areas{background:#f0f7f0;border:1px solid #b8dfb8;border-radius:10px;' +
+      'padding:14px 20px;margin-bottom:16px}' +
+    '.areas-title{font-size:9px;font-weight:700;color:#2d7a2d;letter-spacing:1.5px;' +
+      'text-transform:uppercase;margin-bottom:10px}' +
+    '.areas-tbl{width:100%;border-collapse:collapse}' +
+    '.atd-chk{color:#2d7a2d;font-weight:700;font-size:11px;padding:3px 6px 3px 0;width:16px;vertical-align:middle}' +
+    '.atd-nom{font-size:10px;font-weight:600;color:#1a4a1a;padding:3px 8px 3px 0;vertical-align:middle}' +
+    '.atd-sep{font-size:10px;color:#888;padding:3px 6px;vertical-align:middle}' +
+    '.atd-resp{font-size:10px;color:#3a5a3a;padding:3px 0;vertical-align:middle;font-style:italic}' +
+    '.fecha{font-size:12px;color:#555;text-align:center;font-style:italic;margin-bottom:16px}' +
+    '.sigs{display:flex;justify-content:space-around;margin-bottom:18px}' +
+    '.sig{text-align:center;width:180px}' +
+    '.sig-space{height:44px}' +
+    '.sig-line{border-top:1px solid #aaa;margin-bottom:5px}' +
+    '.sig-lbl{font-size:10px;color:#888}' +
+    '.verif{background:#1e3a5f;border-radius:12px;padding:18px 28px;text-align:center}' +
+    '.v-lbl{font-size:9px;color:rgba(255,255,255,.6);letter-spacing:2px;text-transform:uppercase}' +
+    '.v-code{font-family:monospace;font-size:20px;font-weight:700;color:#fff;letter-spacing:5px;margin-top:8px}' +
+    '.v-hint{font-size:9px;color:rgba(255,255,255,.5);margin-top:5px}' +
+    '.ftr{background:#f0f4f8;padding:12px 44px;text-align:center;font-size:9px;' +
+      'color:#aaa;border-top:1px solid #e8edf4;line-height:1.8;flex-shrink:0}';
+
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${css}</style></head><body>` +
+    `<div class="page">` +
+      `<div class="hdr">${logoTag}<div class="inst">` +
+        `<div class="inst-name">${institucion}</div>` +
+        `<div class="inst-sub">Institución Educativa Privada &middot; Floridablanca, Santander</div>` +
+      `</div></div>` +
+      `<div class="title-blk">` +
+        `<div class="t-badge">Certificado Oficial</div><br>` +
+        `<div class="t-main">Paz y Salvo</div>` +
+        `<div class="t-desc">Sistema Institucional de Certificación</div>` +
+      `</div>` +
+      `<div class="body"><div>` +
+        `<p class="intro">La Dirección de la Institución Educativa certifica que el colaborador:</p>` +
+        `<div class="person">` +
+          `<div class="p-name">${doc.nombre}</div>` +
+          `<div class="p-cc">C&eacute;dula de Ciudadan&iacute;a No. ${doc.cedula}</div>` +
+        `</div>` +
+        `<p class="cert-txt">Se encuentra a <strong>PAZ Y SALVO</strong> con todas las dependencias de la ` +
+        `Institución Educativa ${institucion}, habiendo cumplido satisfactoriamente con todos ` +
+        `los requerimientos establecidos en el proceso de certificación de retiro y desvinculación institucional.</p>` +
+        areasHtml +
+      `</div><div>` +
+        `<p class="fecha">Expedido en Floridablanca, Santander, el ${fechaFormateada}.</p>` +
+        `<div class="sigs" style="justify-content:center"><div class="sig">` +
+          (doc.responsableTH
+            ? `<div class="sig-space" style="display:flex;align-items:flex-end;justify-content:center">` +
+                `<span style="font-family:Georgia,serif;font-size:15px;font-style:italic;color:#2d5a2d">${doc.responsableTH}</span>` +
+              `</div>`
+            : `<div class="sig-space"></div>`) +
+          `<div class="sig-line"></div><div class="sig-lbl">Talento Humano</div>` +
+        `</div></div>` +
+        `<div class="verif">` +
+          `<div class="v-lbl">C&oacute;digo de verificaci&oacute;n</div>` +
+          `<div class="v-code">${doc.codigoVerificacion}</div>` +
+          `<div class="v-hint">Verifique la autenticidad en el sistema institucional</div>` +
+        `</div>` +
+      `</div></div>` +
+      `<div class="ftr">Documento generado autom&aacute;ticamente &middot; ` +
+        `Sistema de Paz y Salvo Institucional &middot; ${institucion} &middot; ${fechaFormateada}</div>` +
+    `</div></body></html>`;
 }
 
-// Vista previa / abrir PDF en nueva pestaña
+// Única fuente oficial de generación del PDF. Valida los datos, convierte el
+// logo SVG a PNG (evita páginas en blanco en html2canvas), adjunta el elemento
+// al DOM temporalmente para garantizar un renderizado correcto, y devuelve el
+// base64 puro (sin prefijo data URI).
+async function _generarPdfClienteSide(doc) {
+  if (!doc) throw new Error('Datos del documento ausentes');
+  const nombre = String(doc.nombre || '').trim();
+  const cedula = String(doc.cedula || '').trim();
+  const codigo = String(doc.codigoVerificacion || '').trim();
+  if (!nombre) throw new Error('El documento no tiene nombre del colaborador');
+  if (!cedula) throw new Error('El documento no tiene cédula del colaborador');
+  if (!codigo) throw new Error('El documento no tiene código de verificación');
+  if (!doc.areas || !doc.areas.length) throw new Error('El documento no contiene áreas aprobadas');
+
+  // ── LOGS DE DIAGNÓSTICO ──────────────────────────────────────────────────────
+  console.log('[PDF] ► Colaborador:', nombre, '|', cedula);
+  console.log('[PDF] ► Código verificación:', codigo);
+  console.log('[PDF] ► Áreas (' + doc.areas.length + '):', doc.areas.map(a => a.nombre).join(', '));
+  console.log('[PDF] ► ResponsableTH:', doc.responsableTH || '(sin firma)');
+  console.log('[PDF] ► FechaEmisión:', doc.fechaEmision);
+  console.log('[PDF] ► Institución:', doc.institucion);
+
+  const logoDataUrl = await _obtenerLogoBase64();
+  console.log('[PDF] ► Logo:', logoDataUrl ? 'OK (' + logoDataUrl.length + ' chars)' : 'NO disponible');
+
+  const htmlStr = _generarHtmlCertificado(doc, logoDataUrl);
+  console.log('[PDF] ► HTML generado:', htmlStr.length, 'chars');
+
+  // position:absolute + visibility:hidden evita dos problemas conocidos de html2canvas:
+  //   1. z-index:-9999 coloca el elemento detrás del fondo → PDF en blanco.
+  //   2. position:fixed hereda el scrollX actual del browser → recorte en el lado izquierdo.
+  // Con scrollX:0/scrollY:0 en html2canvas el capturado siempre parte desde (0,0) del documento.
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:absolute;top:0;left:0;width:816px;visibility:hidden;pointer-events:none;overflow:visible';
+  wrapper.innerHTML = htmlStr;
+  document.body.appendChild(wrapper);
+
+  // Esperar un frame para que el browser calcule el layout antes de capturar.
+  await new Promise(r => requestAnimationFrame(r));
+
+  const page = wrapper.querySelector('.page') || wrapper.firstElementChild;
+  console.log('[PDF] ► Elemento .page encontrado:', !!page,
+    '| offsetWidth:', page ? page.offsetWidth : 'N/A',
+    '| offsetHeight:', page ? page.offsetHeight : 'N/A');
+
+  try {
+    const opt = {
+      margin:      0,
+      filename:    `PazYSalvo_${nombre.replace(/\s+/g, '_')}.pdf`,
+      image:       { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: false, windowWidth: 816, scrollX: 0, scrollY: 0, logging: false },
+      jsPDF:       { unit: 'in', format: 'letter', orientation: 'portrait' },
+    };
+    const b64Uri = await html2pdf().from(page).set(opt).outputPdf('datauristring');
+    console.log('[PDF] ► b64Uri length:', b64Uri.length);
+    const commaIdx = b64Uri.indexOf(',');
+    const result = commaIdx >= 0 ? b64Uri.slice(commaIdx + 1) : b64Uri;
+    console.log('[PDF] ► base64 final length:', result.length, result.length < 5000 ? '⚠️ POSIBLEMENTE VACÍO' : '✓ OK');
+    return result;
+  } finally {
+    if (wrapper.parentNode) document.body.removeChild(wrapper);
+  }
+}
+
+// ─── FUNCIÓN CANÓNICA DE GENERACIÓN ──────────────────────────────────────────
+// Único punto de entrada para obtener el PDF de un colaborador desde el servidor.
+// Todos los flujos de descarga y correo usan esta función para garantizar
+// que el PDF descargado es idéntico al enviado por correo.
+async function _generarPdfOficial(colaboradorId) {
+  const r = await api("descargar_pdf", { colaboradorId });
+  if (!r.ok) throw new Error(r.error || "Error al obtener los datos del paz y salvo");
+  if (!r.documento) throw new Error("El servidor no devolvió datos del documento");
+  const b64      = await _generarPdfClienteSide(r.documento);
+  const filename = r.filename || `PazYSalvo_${String(r.documento.nombre || colaboradorId).replace(/\s+/g, '_')}.pdf`;
+  _docActual = r.documento;
+  return { b64, filename, documento: r.documento };
+}
+
+// ─── FUNCIONES DE DESCARGA (delegan en _generarPdfOficial) ───────────────────
+
+// Descarga directa como archivo (sin abrir pestaña).
+async function descargarComoPDF(doc) {
+  if (!doc || !doc.colaboradorId) { toast("No se pudo identificar el colaborador.", "error"); return; }
+  const cid    = doc.colaboradorId;
+  const cached = STATE._pdfCache[cid];
+  if (cached && cached.pdfBase64 && cached.pdfBase64.length > 5000) {
+    _dispararDescargaPdf(cached.pdfBase64, cached.filename);
+    toast("PDF descargado.", "success");
+    return;
+  }
+  if (cached) delete STATE._pdfCache[cid];
+  toast("Generando PDF...", "info");
+  try {
+    const { b64, filename, documento } = await _generarPdfOficial(cid);
+    STATE._pdfCache[cid] = { pdfBase64: b64, filename };
+    _dispararDescargaPdf(b64, filename);
+    toast("PDF descargado.", "success");
+  } catch(e) {
+    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
+  }
+}
+
+// Abre el PDF en una nueva pestaña del navegador.
 async function descargarDocumento(colaboradorId) {
-  // Abrir pestaña ANTES del await para no ser bloqueado por popup-blocker
   const win = window.open("about:blank", "_blank");
   if (win) win.document.write("<html><body style='font-family:Arial;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f6fa'><p style='color:#1e3a5f;font-size:16px'>Generando PDF, por favor espere...</p></body></html>");
-  
   toast("Generando PDF...", "info");
-  const r = await api("descargar_pdf", { colaboradorId });
-  if (!r.ok || !r.pdfBase64) {
+  try {
+    const { b64, filename } = await _generarPdfOficial(colaboradorId);
+    const blob = _base64ToBlob(b64, "application/pdf");
+    const url  = URL.createObjectURL(blob);
+    if (win) { win.location.href = url; win.focus(); }
+    else {
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast("PDF listo.", "success");
+  } catch(e) {
     if (win) win.close();
-    toast(r.error || "Error al generar el PDF.", "error");
-    return;
+    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
   }
-  _docActual = r.documento || { colaboradorId };
-
-  const blob = _base64ToBlob(r.pdfBase64, "application/pdf");
-  const url  = URL.createObjectURL(blob);
-
-  if (win) {
-    win.location.href = url;
-    win.focus();
-  } else {
-    // Popup bloqueado → descargar directamente
-    const a = document.createElement("a");
-    a.href = url; a.download = r.filename; a.click();
-  }
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-  toast("PDF listo.", "success");
 }
 
-// Alias mantenido por compatibilidad (usado desde modal cuando popup fue bloqueado)
+// Alias para compatibilidad con llamadas desde modal.
 async function abrirDocumentoEnPestana(doc) {
-  if (doc && doc.colaboradorId) {
-    await descargarDocumento(doc.colaboradorId);
-  }
+  if (doc && doc.colaboradorId) await descargarDocumento(doc.colaboradorId);
 }
 
-// Descarga PDF directamente (sin abrir pestaña)
-async function descargarComoPDF(doc) {
-  if (!doc || !doc.colaboradorId) {
-    toast("No se pudo identificar el colaborador.", "error");
-    return;
-  }
+// Descarga directa desde botón SA (sin preview).
+async function descargarDocumentoImprimir(colaboradorId) {
   toast("Generando PDF...", "info");
-  const r = await api("descargar_pdf", { colaboradorId: doc.colaboradorId });
-  if (!r.ok || !r.pdfBase64) {
-    toast(r.error || "Error al generar el PDF.", "error");
-    return;
+  try {
+    const { b64, filename } = await _generarPdfOficial(colaboradorId);
+    const blob = _base64ToBlob(b64, "application/pdf");
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    toast("PDF descargado.", "success");
+  } catch(e) {
+    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
   }
-  if (r.documento) { _docActual = r.documento; }
-
-  const blob = _base64ToBlob(r.pdfBase64, "application/pdf");
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href = url;
-  a.download = r.filename || ("PazYSalvo_" + doc.nombre.replace(/\s+/g, "_") + ".pdf");
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
-  toast("PDF descargado.", "success");
 }
 
-// Guardar como PDF desde el modal (botón "Guardar PDF")
+// Desde modal: botón "Guardar PDF".
 function imprimirDocumento() {
   if (!_docActual) return;
   descargarComoPDF(_docActual);
 }
 
-// Imprimir / abrir PDF en nueva pestaña desde el modal
+// Desde modal: abrir en nueva pestaña.
 async function printDocumento() {
   if (!_docActual) return;
-  await descargarDocumento(_docActual.colaboradorId || (_docActual.cedula && _docActual.cedula));
+  await descargarDocumento(_docActual.colaboradorId);
 }
 
-// Descarga directa desde botón SA (sin preview previo)
-async function descargarDocumentoImprimir(colaboradorId) {
-  toast("Generando PDF...", "info");
-  const r = await api("descargar_pdf", { colaboradorId });
-  if (!r.ok || !r.pdfBase64) {
-    toast(r.error || "Error al generar el PDF.", "error");
-    return;
-  }
-  _docActual = r.documento || { colaboradorId };
-
-  const blob = _base64ToBlob(r.pdfBase64, "application/pdf");
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href = url;
-  a.download = r.filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 3000);
-  toast("PDF descargado.", "success");
+// Alias interno (mantenido por si hay referencias existentes).
+async function _descargarPdfDelServidor(colaboradorId) {
+  return _generarPdfOficial(colaboradorId);
 }
 
 // ─── CERTIFICADO HTML (para modal de vista previa) ─────────────────────────
@@ -2301,7 +3090,10 @@ document.addEventListener("keydown", e => {
     if (document.getElementById("screen-login").classList.contains("active")) handleLogin();
   }
   if (e.key === "Escape") {
-    document.querySelectorAll(".modal-overlay.active").forEach(m => m.classList.remove("active"));
+    document.querySelectorAll(".modal-overlay.active").forEach(m => {
+      if (m.id === "modal-primer-login") return; // no se puede cerrar con Escape
+      m.classList.remove("active");
+    });
     resolveConfirm(false);
   }
 });
