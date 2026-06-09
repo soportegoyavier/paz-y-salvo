@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import nodemailer from 'npm:nodemailer@6'
 import { PDFDocument, StandardFonts, rgb, PDFFont } from 'npm:pdf-lib@1.17.1'
+import { encodeBase64 } from 'jsr:@std/encoding/base64'
 
 // ─── SETUP ────────────────────────────────────────────────────────────────────
 const supabase: SupabaseClient = createClient(
@@ -113,7 +114,7 @@ function getAreasRequeridas(colaborador: Record<string, any>, areas: Record<stri
   const jefeId = String(colaborador.areas_requeridas || '')
 
   if (areas.some(a => String(a.aplica_a || '').trim())) {
-    return areas.filter(a => {
+    const res = areas.filter(a => {
       const ap = String(a.aplica_a || '').toUpperCase()
       if (!ap) return false
       const tipos = ap.split(',').map(t => t.trim())
@@ -125,6 +126,12 @@ function getAreasRequeridas(colaborador: Record<string, any>, areas: Record<stri
       }
       return true
     })
+    // Siempre incluir el área departamental asignada (jefeId) aunque tenga aplica_a vacío
+    if (jefeId) {
+      const jefe = areas.find(a => a.id === jefeId)
+      if (jefe && !res.find(r => r.id === jefeId)) res.push(jefe)
+    }
+    return res
   }
 
   if (!tipo) return areas
@@ -146,7 +153,7 @@ function getAreasRequeridas(colaborador: Record<string, any>, areas: Record<stri
   }
 
   const res = areas.filter(a => nombres.has(String(a.nombre)))
-  if ((tipo === 'DOCENTE' || tipo === 'ADMINISTRATIVO') && jefeId) {
+  if (jefeId) {
     const jefe = areas.find(a => a.id === jefeId)
     if (jefe && !res.find(r => r.id === jefeId)) res.push(jefe)
   }
@@ -657,14 +664,17 @@ async function accionGetEstadoColaborador(body: Body) {
 // ─── DOCUMENTO ────────────────────────────────────────────────────────────────
 async function accionGenerarDocumento(body: Body, ses: SessionData) {
   let c: Record<string, unknown> | null = null
-  if (ses.rol === 'COLABORADOR' && body.cedula) {
+  if (body.cedula && !body.colaboradorId) {
+    // Lookup por cédula para cualquier rol (COLABORADOR, ADMIN y SUPERADMIN enviando su propio paz y salvo)
     const { data } = await supabase.from('ps_colaboradores').select('*')
       .eq('cedula', String(body.cedula).trim()).eq('activo', true).maybeSingle()
     c = data
+    console.log(`[generar_doc] lookup por cedula="${body.cedula}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
   } else {
     const { data } = await supabase.from('ps_colaboradores').select('*')
       .eq('id', String(body.colaboradorId || '')).maybeSingle()
     c = data
+    console.log(`[generar_doc] lookup por id="${body.colaboradorId}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
   }
   if (!c) return { ok: false, error: 'Colaborador no encontrado' }
   const colaboradorId = String(c.id)
@@ -899,7 +909,8 @@ async function _generarCertificadoPdf(doc: Record<string, unknown>): Promise<str
 
   // ── Exportar como base64 ──────────────────────────────────────────────────────
   const bytes = await pdfDoc.save()
-  return btoa(Array.from(bytes, (b: number) => String.fromCharCode(b)).join(''))
+  console.log(`[PDF] pdf-lib generado: ${bytes.length} bytes`)
+  return encodeBase64(bytes)
 }
 
 async function accionDescargarPdf(body: Body, ses: SessionData) {
