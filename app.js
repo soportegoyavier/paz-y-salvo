@@ -2522,26 +2522,9 @@ function limpiarSeleccionVG() {
   renderVGTable();
 }
 
-// ── Descarga individual desde Vista Global (con caché) ────
+// ── Descarga individual desde Vista Global ────
 async function descargaIndividualVG(colaboradorId, nombre) {
-  const cached = STATE._pdfCache[colaboradorId];
-  // Validar caché: descartar si el base64 es muy corto (PDF vacío o corrupto < 5 KB)
-  if (cached && cached.pdfBase64 && cached.pdfBase64.length > 5000) {
-    _dispararDescargaPdf(cached.pdfBase64, cached.filename);
-    toast("PDF descargado.", "success");
-    return;
-  }
-  // Si había entrada inválida en caché, limpiarla
-  if (cached) delete STATE._pdfCache[colaboradorId];
-  toast("Generando PDF...", "info");
-  try {
-    const { b64, filename } = await _generarPdfOficial(colaboradorId);
-    STATE._pdfCache[colaboradorId] = { pdfBase64: b64, filename };
-    _dispararDescargaPdf(b64, filename);
-    toast("PDF descargado.", "success");
-  } catch(e) {
-    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
-  }
+  await _abrirImpresion({ colaboradorId });
 }
 
 // Descarga silenciosa de un base64 PDF
@@ -2801,14 +2784,11 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
     fechaFormateada = doc.fechaEmision || new Date().toLocaleDateString('es-CO', { year:'numeric', month:'long', day:'numeric' });
   }
 
-  // CSS completamente escopado a .page y sus descendientes.
-  // NO contiene reglas globales (html, body, *, @page) para no contaminar el DOM
-  // del live-page cuando el <style> es inyectado vía innerHTML. width:816px en px
-  // explícitos (= 8.5in a 96dpi) evita ambigüedad de DPI en distintos navegadores.
   const css =
     '.page,.page *{box-sizing:border-box;margin:0;padding:0}' +
     '.page{width:816px;min-height:1056px;display:flex;flex-direction:column;' +
       'background:#fff;font-family:Arial,sans-serif;color:#1a1a2e}' +
+    '@media print{.page{width:8.5in;min-height:11in}}' +
     '.page .hdr{display:flex;align-items:center;gap:20px;padding:24px 44px 20px;' +
       'border-bottom:3px solid #1e3a5f;background:#f8faff;flex-shrink:0}' +
     '.page .inst{display:flex;flex-direction:column;justify-content:center}' +
@@ -2893,10 +2873,67 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
     `</div>`;
 }
 
-// Única fuente oficial de generación del PDF. Valida los datos, convierte el
-// logo SVG a PNG (evita páginas en blanco en html2canvas), adjunta el elemento
-// al DOM temporalmente para garantizar un renderizado correcto, y devuelve el
-// base64 puro (sin prefijo data URI).
+// Genera un documento HTML completo (DOCTYPE + head + body) listo para
+// abrir en ventana separada y activar el motor PDF nativo del navegador.
+// El @page garantiza que el diálogo de impresión use carta sin márgenes,
+// igual que hacía file.getAs('application/pdf') en la versión GAS original.
+function _generarDocumentoPrint(doc, logoDataUrl) {
+  const inner = _generarHtmlCertificado(doc, logoDataUrl);
+  const nombre = String(doc.nombre || '').replace(/\s+/g, '_');
+  return `<!DOCTYPE html><html lang="es"><head>
+<meta charset="UTF-8">
+<title>PazYSalvo_${nombre}</title>
+<style>
+  @page{size:8.5in 11in;margin:0}
+  html,body{margin:0;padding:0;background:#fff}
+  @media screen{body{display:flex;justify-content:center;padding:20px;background:#ccc;box-sizing:border-box}}
+  @media print{html,body{margin:0;padding:0;background:#fff}}
+</style>
+</head><body>${inner}<script>
+window.addEventListener('load',function(){setTimeout(function(){window.print();},300);});
+</script></body></html>`;
+}
+
+// Abre el certificado en una ventana nueva y activa el motor de impresión/PDF
+// del navegador. Idéntico en resultado al DriveApp.createFile().getAs('application/pdf')
+// que usaba la versión GAS: el mismo motor de renderizado HTML → PDF del browser,
+// sin depender de html2canvas ni de capturas de pantalla.
+async function _abrirImpresion(doc) {
+  if (!doc) { toast("Sin documento activo.", "error"); return; }
+
+  let docCompleto = doc;
+  if (!docCompleto.areas || !docCompleto.areas.length) {
+    toast("Cargando datos del documento...", "info");
+    try {
+      const r = await api("descargar_pdf", { colaboradorId: doc.colaboradorId });
+      if (!r.ok || !r.documento) throw new Error(r.error || "Error al obtener datos");
+      docCompleto = r.documento;
+      _docActual = docCompleto;
+    } catch (e) {
+      toast("Error al cargar el documento: " + (e.message || e), "error", 6000);
+      return;
+    }
+  }
+
+  const win = window.open('', '_blank');
+  if (!win) {
+    toast("Permite ventanas emergentes en el navegador y vuelve a intentarlo.", "error", 6000);
+    return;
+  }
+  try {
+    const logoDataUrl = await _obtenerLogoBase64();
+    const htmlDoc = _generarDocumentoPrint(docCompleto, logoDataUrl);
+    win.document.open('text/html', 'replace');
+    win.document.write(htmlDoc);
+    win.document.close();
+  } catch (e) {
+    win.close();
+    toast("Error al generar el documento: " + (e.message || e), "error", 6000);
+  }
+}
+
+// Única fuente oficial de generación del PDF (base64) para adjuntos de correo.
+// Valida los datos, convierte el logo SVG a PNG y devuelve el base64 puro.
 async function _generarPdfClienteSide(doc) {
   if (!doc) throw new Error('Datos del documento ausentes');
   const nombre = String(doc.nombre || '').trim();
@@ -2919,58 +2956,34 @@ async function _generarPdfClienteSide(doc) {
   console.log('[PDF] ► Logo:', logoDataUrl ? 'OK (' + logoDataUrl.length + ' chars)' : 'NO disponible');
 
   const htmlStr = _generarHtmlCertificado(doc, logoDataUrl);
-  console.log('[PDF] ► HTML generado:', htmlStr.length, 'chars');
 
-  // html2canvas convierte getBCR().left de coordenadas viewport a coordenadas
-  // documento sumando window.scrollX real, incluso cuando se pasa scrollX:0 como
-  // opción. Si la página tiene scroll horizontal (ej. Vista Global), el origen de
-  // captura se desplaza scrollX píxeles a la derecha, recortando el lado izquierdo.
-  // Solución: forzar window.scroll a (0,0) antes de capturar y restaurar después.
-  const savedScrollX = window.scrollX;
-  const savedScrollY = window.scrollY;
-  if (savedScrollX !== 0 || savedScrollY !== 0) {
-    window.scrollTo(0, 0);
-    await new Promise(r => requestAnimationFrame(r));
-  }
-
+  // Posicionar el wrapper en las coordenadas de scroll actuales para que
+  // getBCR().left = 0 (el elemento está en el borde izquierdo del viewport)
+  // y html2canvas calcule: captureLeft = 0 + window.scrollX = scrollX = posición
+  // en documento del elemento. Sin este ajuste, un scrollX > 0 desplaza el
+  // origen de captura y recorta el lado izquierdo del certificado.
+  const sx = window.scrollX, sy = window.scrollY;
   const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:816px;opacity:0;pointer-events:none;overflow:visible';
+  wrapper.style.cssText = `position:absolute;top:${sy}px;left:${sx}px;width:816px;opacity:0;pointer-events:none;overflow:visible`;
   wrapper.innerHTML = htmlStr;
   document.body.appendChild(wrapper);
-
-  // Esperar un frame para que el browser calcule el layout antes de capturar.
   await new Promise(r => requestAnimationFrame(r));
 
   const page = wrapper.querySelector('.page') || wrapper.firstElementChild;
-  if (page) {
-    const bcr = page.getBoundingClientRect();
-    console.log('[PDF] ► .page BCR: left=' + bcr.left + ' top=' + bcr.top +
-      ' width=' + bcr.width + ' height=' + bcr.height);
-    console.log('[PDF] ► window.scrollX=' + window.scrollX + ' scrollY=' + window.scrollY);
-  }
-  console.log('[PDF] ► Elemento .page encontrado:', !!page,
-    '| offsetWidth:', page ? page.offsetWidth : 'N/A',
-    '| offsetHeight:', page ? page.offsetHeight : 'N/A');
 
   try {
     const opt = {
       margin:      0,
       filename:    `PazYSalvo_${nombre.replace(/\s+/g, '_')}.pdf`,
       image:       { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: false, windowWidth: 816, logging: false },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false },
       jsPDF:       { unit: 'in', format: 'letter', orientation: 'portrait' },
     };
     const b64Uri = await html2pdf().from(page).set(opt).outputPdf('datauristring');
-    console.log('[PDF] ► b64Uri length:', b64Uri.length);
     const commaIdx = b64Uri.indexOf(',');
-    const result = commaIdx >= 0 ? b64Uri.slice(commaIdx + 1) : b64Uri;
-    console.log('[PDF] ► base64 final length:', result.length, result.length < 5000 ? '⚠️ POSIBLEMENTE VACÍO' : '✓ OK');
-    return result;
+    return commaIdx >= 0 ? b64Uri.slice(commaIdx + 1) : b64Uri;
   } finally {
     if (wrapper.parentNode) document.body.removeChild(wrapper);
-    if (savedScrollX !== 0 || savedScrollY !== 0) {
-      window.scrollTo(savedScrollX, savedScrollY);
-    }
   }
 }
 
@@ -2988,84 +3001,39 @@ async function _generarPdfOficial(colaboradorId) {
   return { b64, filename, documento: r.documento };
 }
 
-// ─── FUNCIONES DE DESCARGA (delegan en _generarPdfOficial) ───────────────────
+// ─── FUNCIONES DE DESCARGA (todas usan el motor PDF nativo del navegador) ────
 
-// Descarga directa como archivo (sin abrir pestaña).
-async function descargarComoPDF(doc) {
-  if (!doc || !doc.colaboradorId) { toast("No se pudo identificar el colaborador.", "error"); return; }
-  const cid    = doc.colaboradorId;
-  const cached = STATE._pdfCache[cid];
-  if (cached && cached.pdfBase64 && cached.pdfBase64.length > 5000) {
-    _dispararDescargaPdf(cached.pdfBase64, cached.filename);
-    toast("PDF descargado.", "success");
-    return;
-  }
-  if (cached) delete STATE._pdfCache[cid];
-  toast("Generando PDF...", "info");
-  try {
-    const { b64, filename, documento } = await _generarPdfOficial(cid);
-    STATE._pdfCache[cid] = { pdfBase64: b64, filename };
-    _dispararDescargaPdf(b64, filename);
-    toast("PDF descargado.", "success");
-  } catch(e) {
-    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
-  }
+// Botón "Guardar como PDF" del modal.
+function imprimirDocumento() {
+  if (!_docActual) return;
+  _abrirImpresion(_docActual);
 }
 
-// Abre el PDF en una nueva pestaña del navegador.
+// Botón "Imprimir" / abrir en nueva pestaña del modal.
+async function printDocumento() {
+  if (!_docActual) return;
+  await _abrirImpresion(_docActual);
+}
+
+// Abre el documento del colaborador en ventana de impresión.
 async function descargarDocumento(colaboradorId) {
-  const win = window.open("about:blank", "_blank");
-  if (win) win.document.write("<html><body style='font-family:Arial;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f4f6fa'><p style='color:#1e3a5f;font-size:16px'>Generando PDF, por favor espere...</p></body></html>");
-  toast("Generando PDF...", "info");
-  try {
-    const { b64, filename } = await _generarPdfOficial(colaboradorId);
-    const blob = _base64ToBlob(b64, "application/pdf");
-    const url  = URL.createObjectURL(blob);
-    if (win) { win.location.href = url; win.focus(); }
-    else {
-      const a = document.createElement("a");
-      a.href = url; a.download = filename; a.click();
-    }
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-    toast("PDF listo.", "success");
-  } catch(e) {
-    if (win) win.close();
-    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
-  }
+  await _abrirImpresion({ colaboradorId });
 }
 
 // Alias para compatibilidad con llamadas desde modal.
 async function abrirDocumentoEnPestana(doc) {
-  if (doc && doc.colaboradorId) await descargarDocumento(doc.colaboradorId);
+  if (doc && doc.colaboradorId) await _abrirImpresion(doc);
 }
 
-// Descarga directa desde botón SA (sin preview).
+// Descarga directa desde botón SA.
+async function descargarComoPDF(doc) {
+  if (!doc || !doc.colaboradorId) { toast("No se pudo identificar el colaborador.", "error"); return; }
+  await _abrirImpresion(doc);
+}
+
+// Botón de descarga desde vista SA (sin modal previo).
 async function descargarDocumentoImprimir(colaboradorId) {
-  toast("Generando PDF...", "info");
-  try {
-    const { b64, filename } = await _generarPdfOficial(colaboradorId);
-    const blob = _base64ToBlob(b64, "application/pdf");
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
-    toast("PDF descargado.", "success");
-  } catch(e) {
-    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
-  }
-}
-
-// Desde modal: botón "Guardar PDF".
-function imprimirDocumento() {
-  if (!_docActual) return;
-  descargarComoPDF(_docActual);
-}
-
-// Desde modal: abrir en nueva pestaña.
-async function printDocumento() {
-  if (!_docActual) return;
-  await descargarDocumento(_docActual.colaboradorId);
+  await _abrirImpresion({ colaboradorId });
 }
 
 // Alias interno (mantenido por si hay referencias existentes).
