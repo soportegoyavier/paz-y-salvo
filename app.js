@@ -2921,11 +2921,18 @@ async function _generarPdfClienteSide(doc) {
   const htmlStr = _generarHtmlCertificado(doc, logoDataUrl);
   console.log('[PDF] ► HTML generado:', htmlStr.length, 'chars');
 
-  // position:fixed garantiza getBoundingClientRect().left = 0 siempre, sin importar
-  // el scrollX actual de la página. opacity:0 lo oculta al usuario sin crear un
-  // stacking context negativo (z-index:-9999 causaba que html2canvas capturara el
-  // fondo de la app en lugar del certificado → PDF en blanco).
-  // scrollX:0/scrollY:0 en html2canvas ancla el capturado en (0,0) → sin recorte.
+  // html2canvas convierte getBCR().left de coordenadas viewport a coordenadas
+  // documento sumando window.scrollX real, incluso cuando se pasa scrollX:0 como
+  // opción. Si la página tiene scroll horizontal (ej. Vista Global), el origen de
+  // captura se desplaza scrollX píxeles a la derecha, recortando el lado izquierdo.
+  // Solución: forzar window.scroll a (0,0) antes de capturar y restaurar después.
+  const savedScrollX = window.scrollX;
+  const savedScrollY = window.scrollY;
+  if (savedScrollX !== 0 || savedScrollY !== 0) {
+    window.scrollTo(0, 0);
+    await new Promise(r => requestAnimationFrame(r));
+  }
+
   const wrapper = document.createElement('div');
   wrapper.style.cssText = 'position:fixed;top:0;left:0;width:816px;opacity:0;pointer-events:none;overflow:visible';
   wrapper.innerHTML = htmlStr;
@@ -2950,7 +2957,7 @@ async function _generarPdfClienteSide(doc) {
       margin:      0,
       filename:    `PazYSalvo_${nombre.replace(/\s+/g, '_')}.pdf`,
       image:       { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: false, windowWidth: 816, scrollX: 0, scrollY: 0, logging: false },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: false, windowWidth: 816, logging: false },
       jsPDF:       { unit: 'in', format: 'letter', orientation: 'portrait' },
     };
     const b64Uri = await html2pdf().from(page).set(opt).outputPdf('datauristring');
@@ -2961,6 +2968,9 @@ async function _generarPdfClienteSide(doc) {
     return result;
   } finally {
     if (wrapper.parentNode) document.body.removeChild(wrapper);
+    if (savedScrollX !== 0 || savedScrollY !== 0) {
+      window.scrollTo(savedScrollX, savedScrollY);
+    }
   }
 }
 
