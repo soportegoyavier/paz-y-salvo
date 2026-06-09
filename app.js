@@ -2523,8 +2523,8 @@ function limpiarSeleccionVG() {
 }
 
 // ── Descarga individual desde Vista Global ────
-async function descargaIndividualVG(colaboradorId, nombre) {
-  await _abrirImpresion({ colaboradorId });
+async function descargaIndividualVG(colaboradorId) {
+  await _descargarPdfAutomatico(colaboradorId);
 }
 
 // Descarga silenciosa de un base64 PDF
@@ -2988,52 +2988,65 @@ async function _generarPdfClienteSide(doc) {
 }
 
 // ─── FUNCIÓN CANÓNICA DE GENERACIÓN ──────────────────────────────────────────
-// Único punto de entrada para obtener el PDF de un colaborador desde el servidor.
-// Todos los flujos de descarga y correo usan esta función para garantizar
-// que el PDF descargado es idéntico al enviado por correo.
+// Usa el PDF generado server-side por pdf-lib (pdfBase64 del servidor).
+// Si el servidor no lo devuelve (error o despliegue antiguo), usa html2canvas como fallback.
 async function _generarPdfOficial(colaboradorId) {
   const r = await api("descargar_pdf", { colaboradorId });
   if (!r.ok) throw new Error(r.error || "Error al obtener los datos del paz y salvo");
   if (!r.documento) throw new Error("El servidor no devolvió datos del documento");
-  const b64      = await _generarPdfClienteSide(r.documento);
+  const b64 = (r.pdfBase64 && r.pdfBase64.length > 5000)
+    ? r.pdfBase64
+    : await _generarPdfClienteSide(r.documento);
   const filename = r.filename || `PazYSalvo_${String(r.documento.nombre || colaboradorId).replace(/\s+/g, '_')}.pdf`;
   _docActual = r.documento;
   return { b64, filename, documento: r.documento };
 }
 
-// ─── FUNCIONES DE DESCARGA (todas usan el motor PDF nativo del navegador) ────
+// ─── FUNCIONES DE DESCARGA ────────────────────────────────────────────────────
+
+// Núcleo común: genera el PDF server-side y lanza la descarga automática.
+async function _descargarPdfAutomatico(colaboradorId) {
+  toast("Generando PDF...", "info");
+  try {
+    const { b64, filename } = await _generarPdfOficial(colaboradorId);
+    _dispararDescargaPdf(b64, filename);
+    toast("PDF descargado.", "success");
+  } catch (e) {
+    toast("Error generando el PDF: " + (e.message || e), "error", 6000);
+  }
+}
 
 // Botón "Guardar como PDF" del modal.
 function imprimirDocumento() {
   if (!_docActual) return;
-  _abrirImpresion(_docActual);
+  _descargarPdfAutomatico(_docActual.colaboradorId);
 }
 
-// Botón "Imprimir" / abrir en nueva pestaña del modal.
+// Botón "Imprimir" del modal — abre diálogo de impresión del navegador.
 async function printDocumento() {
   if (!_docActual) return;
   await _abrirImpresion(_docActual);
 }
 
-// Abre el documento del colaborador en ventana de impresión.
+// Descarga directa desde contexto de modal o tabla.
 async function descargarDocumento(colaboradorId) {
-  await _abrirImpresion({ colaboradorId });
+  await _descargarPdfAutomatico(colaboradorId);
 }
 
 // Alias para compatibilidad con llamadas desde modal.
 async function abrirDocumentoEnPestana(doc) {
-  if (doc && doc.colaboradorId) await _abrirImpresion(doc);
+  if (doc && doc.colaboradorId) await _descargarPdfAutomatico(doc.colaboradorId);
 }
 
 // Descarga directa desde botón SA.
 async function descargarComoPDF(doc) {
   if (!doc || !doc.colaboradorId) { toast("No se pudo identificar el colaborador.", "error"); return; }
-  await _abrirImpresion(doc);
+  await _descargarPdfAutomatico(doc.colaboradorId);
 }
 
 // Botón de descarga desde vista SA (sin modal previo).
 async function descargarDocumentoImprimir(colaboradorId) {
-  await _abrirImpresion({ colaboradorId });
+  await _descargarPdfAutomatico(colaboradorId);
 }
 
 // Alias interno (mantenido por si hay referencias existentes).
