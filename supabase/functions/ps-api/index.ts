@@ -976,7 +976,14 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
   const r = await accionGetPendientesRecordatorio(body, ses)
   if (!r.ok) return r
 
-  const pendientes        = ((r as Record<string, unknown[]>).pendientes ?? []) as Body[]
+  const todosLosPendientes = ((r as Record<string, unknown[]>).pendientes ?? []) as Body[]
+  const areaIdsFiltro      = Array.isArray(body.areaIds) ? (body.areaIds as string[]) : []
+  const pendientes         = areaIdsFiltro.length
+    ? todosLosPendientes.filter(p => areaIdsFiltro.includes(String(p.areaId)))
+    : todosLosPendientes
+
+  console.log(`[enviar_recordatorio] areaIdsFiltro=${JSON.stringify(areaIdsFiltro)} total=${todosLosPendientes.length} filtrados=${pendientes.length}`)
+
   const colaboradorNombre = String((r as Record<string, unknown>).colaboradorNombre || '')
   const resultados: Body[] = []
   let enviados = 0
