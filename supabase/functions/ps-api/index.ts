@@ -944,13 +944,15 @@ async function accionVerificarCodigo(body: Body) {
 // ─── RECORDATORIO / SOLICITUD TH ─────────────────────────────────────────────
 async function accionGetPendientesRecordatorio(body: Body, ses: SessionData) {
   let c: Record<string, unknown> | null = null
-  if (ses.rol === 'COLABORADOR') {
+  if (body.cedula && !body.colaboradorId) {
     const { data } = await supabase.from('ps_colaboradores').select('*')
-      .eq('cedula', String(body.cedula || '').trim()).eq('activo', true).maybeSingle()
+      .eq('cedula', String(body.cedula).trim()).eq('activo', true).maybeSingle()
     c = data
+    console.log(`[pendientes_rec] lookup por cedula="${body.cedula}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
   } else {
     const { data } = await supabase.from('ps_colaboradores').select('*').eq('id', String(body.colaboradorId || '')).maybeSingle()
     c = data
+    console.log(`[pendientes_rec] lookup por id="${body.colaboradorId}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
   }
   if (!c) return { ok: false, error: 'Colaborador no encontrado' }
 
