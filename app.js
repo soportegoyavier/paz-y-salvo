@@ -341,6 +341,35 @@ function resolveConfirm(val) {
   if (STATE.confirmResolve) STATE.confirmResolve(val);
 }
 
+// ── CONFIRM CON CONTRASEÑA ────────────────────────────────
+function confirmConPassword(title, msg, okLabel = "Confirmar") {
+  return new Promise(resolve => {
+    STATE.confirmPwdResolve = resolve;
+    document.getElementById("confirm-pwd-title").textContent = title;
+    document.getElementById("confirm-pwd-msg").innerHTML    = msg;
+    document.getElementById("confirm-pwd-ok-btn").textContent = okLabel;
+    document.getElementById("confirm-pwd-input").value = "";
+    document.getElementById("confirm-pwd-error").style.display = "none";
+    document.getElementById("confirm-pwd-overlay").classList.add("active");
+    setTimeout(() => document.getElementById("confirm-pwd-input").focus(), 100);
+  });
+}
+function resolveConfirmPwd(ok) {
+  if (!ok) {
+    document.getElementById("confirm-pwd-overlay").classList.remove("active");
+    if (STATE.confirmPwdResolve) STATE.confirmPwdResolve(null);
+    return;
+  }
+  const pwd = document.getElementById("confirm-pwd-input").value;
+  if (!pwd) {
+    document.getElementById("confirm-pwd-error").textContent = "Ingresa tu contraseña.";
+    document.getElementById("confirm-pwd-error").style.display = "block";
+    return;
+  }
+  document.getElementById("confirm-pwd-overlay").classList.remove("active");
+  if (STATE.confirmPwdResolve) STATE.confirmPwdResolve(pwd);
+}
+
 // ── MODAL ────────────────────────────────────────────────
 function cerrarModal(id) { document.getElementById(id).classList.remove("active"); }
 function abrirModal(id)  { document.getElementById(id).classList.add("active"); }
@@ -433,7 +462,11 @@ async function handleLogin() {
     }
 
     _guardarSesion();
-    iniciarApp();
+    // Guard: onAuthStateChange may have already called iniciarApp() synchronously
+    // (before signInWithPassword returned). Skip to avoid double navigateTo().
+    if (!document.getElementById('screen-app').classList.contains('active')) {
+      iniciarApp();
+    }
   } catch(e) {
     errEl.textContent = "Error de conexión. Intenta de nuevo.";
     errEl.classList.add("visible");
@@ -1326,11 +1359,26 @@ function onChangeTipoColab(tipo) {
   populateColabAreasSelect("", tipo);
 }
 
+// Genera el username con la convención institucional a partir del nombre completo.
+// Formato en BD: "APELLIDO1 APELLIDO2 NOMBRE(S)" → nombre1 + inicial(apellido1) + "." + apellido2
+// Ej: "CALA MORA ANDERSON DAVID" → "andersonc.mora"
+function _generarUsernameDesdeNombre(nombreCompleto) {
+  const limpio = String(nombreCompleto || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")  // quita tildes y ñ→n
+    .replace(/[^a-zA-Z\s]/g, " ")
+    .trim().toLowerCase();
+  const partes = limpio.split(/\s+/).filter(Boolean);
+  if (!partes.length) return "";
+  if (partes.length < 3) return partes.join(".");
+  return partes[2] + partes[0][0] + "." + partes[1];
+}
+
 function abrirModalCrearColaborador() {
   STATE.colabEditId = null;
   document.getElementById("modal-colab-title").textContent    = "Nuevo colaborador";
   document.getElementById("colab-nombre").value               = "";
   document.getElementById("colab-cedula").value               = "";
+  document.getElementById("colab-email").value                = "";
   document.getElementById("colab-username").value             = "";
   document.getElementById("colab-password").value             = "";
   document.getElementById("colab-requiere-ps").checked        = true;
@@ -1342,10 +1390,14 @@ function abrirModalCrearColaborador() {
   document.getElementById("colab-jefe-group").style.display   = "none";
   document.getElementById("colab-edit-id").value              = "";
   populateColabAreasSelect("", "");
-  document.getElementById("colab-cedula").oninput = function() {
-    if (!document.getElementById("colab-username").value)
-      document.getElementById("colab-username").value = this.value;
+  // Username autogenerado desde el nombre (convención institucional); se detiene si el SA lo edita a mano
+  const unameEl = document.getElementById("colab-username");
+  unameEl.dataset.manual = "";
+  unameEl.oninput = function() { this.dataset.manual = this.value ? "1" : ""; };
+  document.getElementById("colab-nombre").oninput = function() {
+    if (!unameEl.dataset.manual) unameEl.value = _generarUsernameDesdeNombre(this.value);
   };
+  document.getElementById("colab-cedula").oninput = null;
   abrirModal("modal-colaborador");
 }
 
@@ -1390,17 +1442,20 @@ async function guardarColaborador() {
   if (!tipoColaborador)   { toast("Selecciona el tipo de colaborador", "error"); return; }
 
   if (!id) {
+    const email    = document.getElementById("colab-email").value.trim().toLowerCase();
     const username = document.getElementById("colab-username").value.trim();
     const password = document.getElementById("colab-password").value;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Ingresa un correo electrónico válido — es el correo con el que iniciará sesión", "error"); return; }
     if (!username) { toast("El usuario de acceso es obligatorio", "error"); return; }
     if (!password || password.length < 6) { toast("La contraseña debe tener al menos 6 caracteres", "error"); return; }
     const ok = await confirm("Confirmar", `¿Crear colaborador "${nombre}" como ${tipoColaborador.toLowerCase()}?`, "Crear");
     if (!ok) return;
     const rColab = await api("crear_colaborador", { nombre, cedula, requierePazSalvo: requiere, tipoColaborador, nivelEducativo, areasRequeridas });
     if (!rColab.ok) { toast(rColab.error, "error"); return; }
-    const rUser  = await api("crear_usuario", { username, password, rol: "COLABORADOR", areaId: "" });
+    const rUser  = await api("crear_usuario", { username, password, rol: "COLABORADOR", areaId: "", email, cedula });
     if (!rUser.ok) toast(`Colaborador creado pero error al crear usuario: ${rUser.error}`, "error");
-    else toast(`${nombre} creado con usuario "${username}" ✓`, "success");
+    else if (rUser.authCreado === false) toast(`Usuario creado pero sin cuenta de acceso: ${rUser.authError || 'error en Auth'}. Usa "Reset password" en Usuarios para activarla.`, "error");
+    else toast(`${nombre} creado — iniciará sesión con ${email} ✓`, "success");
     cerrarModal("modal-colaborador");
     loadSAColaboradores();
     return;
@@ -2490,6 +2545,8 @@ function renderVGTable() {
                      <button class="btn-icon-action btn-icon-warn" title="Forzar paz y salvo"
                        onclick="forzarPazSalvo('${c.id}','${esc}')">⚡</button>`
                 }
+                <button class="btn-icon-action btn-icon-danger" title="Resetear aprobaciones"
+                  onclick="resetearAprobaciones('${c.id}','${esc}')">🗑️</button>
               </td>
             </tr>`;
           }).join("")}
@@ -2699,14 +2756,29 @@ async function enviarRecordatorioDesdeModal() {
 // SUPER ADMIN — FORZAR PAZ Y SALVO
 // ═══════════════════════════════════════════════════════
 async function forzarPazSalvo(colaboradorId, nombre) {
-  const ok = await confirm(
+  const password = await confirmConPassword(
     "⚡ Forzar Paz y Salvo",
-    `Esto aprobará <strong>todas las áreas</strong> para <strong>${nombre}</strong> como si cada administrador lo hubiera aprobado. Esta acción queda registrada en los logs.<br><br>¿Confirmas que deseas otorgar el paz y salvo completo?`,
+    `Esto aprobará <strong>todas las áreas</strong> para <strong>${nombre}</strong> como si cada administrador lo hubiera aprobado.<br><br>Esta acción queda registrada en los logs.`,
     "Sí, forzar"
   );
-  if (!ok) return;
+  if (!password) return;
 
-  const r = await api("forzar_paz_salvo", { colaboradorId });
+  const r = await api("forzar_paz_salvo", { colaboradorId, password });
+  if (!r.ok) { toast(r.error, "error"); return; }
+
+  toast(r.mensaje, "success");
+  loadSAGlobal();
+}
+
+async function resetearAprobaciones(colaboradorId, nombre) {
+  const password = await confirmConPassword(
+    "🗑️ Resetear aprobaciones",
+    `Esto eliminará <strong>todas las aprobaciones</strong> de <strong>${nombre}</strong>, dejándolo en estado PENDIENTE en todas sus áreas.<br><br>Esta acción no se puede deshacer.`,
+    "Sí, resetear"
+  );
+  if (!password) return;
+
+  const r = await api("resetear_aprobaciones", { colaboradorId, password });
   if (!r.ok) { toast(r.error, "error"); return; }
 
   toast(r.mensaje, "success");
@@ -2944,39 +3016,47 @@ async function _generarPdfClienteSide(doc) {
   if (!codigo) throw new Error('El documento no tiene código de verificación');
   if (!doc.areas || !doc.areas.length) throw new Error('El documento no contiene áreas aprobadas');
 
-  // ── LOGS DE DIAGNÓSTICO ──────────────────────────────────────────────────────
   console.log('[PDF] ► Colaborador:', nombre, '|', cedula);
-  console.log('[PDF] ► Código verificación:', codigo);
   console.log('[PDF] ► Áreas (' + doc.areas.length + '):', doc.areas.map(a => a.nombre).join(', '));
-  console.log('[PDF] ► ResponsableTH:', doc.responsableTH || '(sin firma)');
-  console.log('[PDF] ► FechaEmisión:', doc.fechaEmision);
-  console.log('[PDF] ► Institución:', doc.institucion);
 
   const logoDataUrl = await _obtenerLogoBase64();
-  console.log('[PDF] ► Logo:', logoDataUrl ? 'OK (' + logoDataUrl.length + ' chars)' : 'NO disponible');
-
   const htmlStr = _generarHtmlCertificado(doc, logoDataUrl);
 
-  // Posicionar el wrapper en las coordenadas de scroll actuales para que
-  // getBCR().left = 0 (el elemento está en el borde izquierdo del viewport)
-  // y html2canvas calcule: captureLeft = 0 + window.scrollX = scrollX = posición
-  // en documento del elemento. Sin este ajuste, un scrollX > 0 desplaza el
-  // origen de captura y recorta el lado izquierdo del certificado.
-  const sx = window.scrollX, sy = window.scrollY;
+  // Guardar estado del scroll y del body para restaurar después
+  const ox = window.scrollX, oy = window.scrollY;
+  const prevOverflow = document.body.style.overflow;
+  const prevHeight   = document.body.style.height;
+
+  // Resetear scroll a (0,0): con position:fixed en top:0/left:0 y scrollX:0 en
+  // html2canvas, captureLeft = getBCR().left + scrollX_opcion = 0 + 0 = 0.
+  // El elemento queda alineado con el origen del canvas → sin recorte lateral.
+  window.scrollTo(0, 0);
+  // Anular overflow:hidden que imponen los modales para que html2canvas
+  // pueda pintar el wrapper aunque esté fuera del viewport del body.
+  document.body.style.overflow = 'visible';
+  document.body.style.height   = 'auto';
+
   const wrapper = document.createElement('div');
-  wrapper.style.cssText = `position:absolute;top:${sy}px;left:${sx}px;width:816px;opacity:0;pointer-events:none;overflow:visible`;
+  // z-index:-9999 oculta el wrapper detrás del fondo del body (invisible al usuario)
+  // sin alterar la opacidad, para que html2canvas capte todos los colores de fondo.
+  // position:fixed+top:0+left:0 garantiza getBCR().left=0 sin importar el scroll histórico.
+  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:816px;z-index:-9999;pointer-events:none;overflow:visible';
   wrapper.innerHTML = htmlStr;
   document.body.appendChild(wrapper);
+
+  // Esperar dos frames para que el layout y los estilos se apliquen
+  await new Promise(r => requestAnimationFrame(r));
   await new Promise(r => requestAnimationFrame(r));
 
   const page = wrapper.querySelector('.page') || wrapper.firstElementChild;
+  console.log('[PDF] ► .page:', page ? page.offsetWidth + 'x' + page.offsetHeight : 'NO encontrado');
 
   try {
     const opt = {
       margin:      0,
       filename:    `PazYSalvo_${nombre.replace(/\s+/g, '_')}.pdf`,
       image:       { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false, scrollX: 0, scrollY: 0 },
       jsPDF:       { unit: 'in', format: 'letter', orientation: 'portrait' },
     };
     const b64Uri = await html2pdf().from(page).set(opt).outputPdf('datauristring');
@@ -2984,6 +3064,9 @@ async function _generarPdfClienteSide(doc) {
     return commaIdx >= 0 ? b64Uri.slice(commaIdx + 1) : b64Uri;
   } finally {
     if (wrapper.parentNode) document.body.removeChild(wrapper);
+    document.body.style.overflow = prevOverflow;
+    document.body.style.height   = prevHeight;
+    window.scrollTo(ox, oy);
   }
 }
 

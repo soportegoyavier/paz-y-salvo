@@ -10,6 +10,13 @@ const supabase: SupabaseClient = createClient(
   { auth: { persistSession: false } }
 )
 
+// Cliente anon — solo para verificar contraseñas de usuario (signInWithPassword)
+const supabaseAnon: SupabaseClient = createClient(
+  Deno.env.get('SUPABASE_URL')!,
+  Deno.env.get('SUPABASE_ANON_KEY')!,
+  { auth: { persistSession: false } }
+)
+
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -625,7 +632,16 @@ async function accionGetVistaGlobal() {
   return { ok: true, colaboradores, areas: areasAll ?? [] }
 }
 
+async function verificarPassword(email: string, password: string): Promise<boolean> {
+  const { error } = await supabaseAnon.auth.signInWithPassword({ email, password })
+  return !error
+}
+
 async function accionForzarPazSalvo(body: Body, ses: SessionData) {
+  if (!body.password) return { ok: false, error: 'Se requiere contraseña para esta acción' }
+  const ok = await verificarPassword(ses.email, String(body.password))
+  if (!ok) return { ok: false, error: 'Contraseña incorrecta' }
+
   const { data: c } = await supabase.from('ps_colaboradores').select('*').eq('id', String(body.colaboradorId)).single()
   if (!c) return { ok: false, error: 'Colaborador no encontrado' }
   const { data: areasAll } = await supabase.from('ps_areas').select('*').eq('activo', true)
@@ -637,6 +653,25 @@ async function accionForzarPazSalvo(body: Body, ses: SessionData) {
   await supabase.from('ps_aprobaciones').upsert(rows, { onConflict: 'colaborador_id,area_id' })
   await log(ses.username, ses.rol, 'FORZAR_PAZ_SALVO', `${c.nombre} — ${areasAll.length} áreas`)
   return { ok: true, mensaje: `Paz y salvo otorgado a ${c.nombre} en ${areasAll.length} área(s)` }
+}
+
+async function accionResetearAprobaciones(body: Body, ses: SessionData) {
+  if (!body.password) return { ok: false, error: 'Se requiere contraseña para esta acción' }
+  const ok = await verificarPassword(ses.email, String(body.password))
+  if (!ok) return { ok: false, error: 'Contraseña incorrecta' }
+
+  const colaboradorId = String(body.colaboradorId || '')
+  if (!colaboradorId) return { ok: false, error: 'colaboradorId requerido' }
+
+  const { data: c } = await supabase.from('ps_colaboradores').select('nombre').eq('id', colaboradorId).single()
+  if (!c) return { ok: false, error: 'Colaborador no encontrado' }
+
+  const { error, count } = await supabase.from('ps_aprobaciones')
+    .delete({ count: 'exact' }).eq('colaborador_id', colaboradorId)
+  if (error) return { ok: false, error: error.message }
+
+  await log(ses.username, ses.rol, 'RESETEAR_APROBACIONES', `${c.nombre} — ${count ?? 0} registros eliminados`)
+  return { ok: true, mensaje: `Aprobaciones de ${c.nombre} restablecidas (${count ?? 0} eliminadas)` }
 }
 
 async function accionGetEstadoColaborador(body: Body) {
@@ -944,13 +979,15 @@ async function accionVerificarCodigo(body: Body) {
 // ─── RECORDATORIO / SOLICITUD TH ─────────────────────────────────────────────
 async function accionGetPendientesRecordatorio(body: Body, ses: SessionData) {
   let c: Record<string, unknown> | null = null
-  if (ses.rol === 'COLABORADOR') {
+  if (body.cedula && !body.colaboradorId) {
     const { data } = await supabase.from('ps_colaboradores').select('*')
-      .eq('cedula', String(body.cedula || '').trim()).eq('activo', true).maybeSingle()
+      .eq('cedula', String(body.cedula).trim()).eq('activo', true).maybeSingle()
     c = data
+    console.log(`[pendientes_rec] lookup por cedula="${body.cedula}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
   } else {
     const { data } = await supabase.from('ps_colaboradores').select('*').eq('id', String(body.colaboradorId || '')).maybeSingle()
     c = data
+    console.log(`[pendientes_rec] lookup por id="${body.colaboradorId}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
   }
   if (!c) return { ok: false, error: 'Colaborador no encontrado' }
 
@@ -976,7 +1013,14 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
   const r = await accionGetPendientesRecordatorio(body, ses)
   if (!r.ok) return r
 
-  const pendientes        = ((r as Record<string, unknown[]>).pendientes ?? []) as Body[]
+  const todosLosPendientes = ((r as Record<string, unknown[]>).pendientes ?? []) as Body[]
+  const areaIdsFiltro      = Array.isArray(body.areaIds) ? (body.areaIds as string[]) : []
+  const pendientes         = areaIdsFiltro.length
+    ? todosLosPendientes.filter(p => areaIdsFiltro.includes(String(p.areaId)))
+    : todosLosPendientes
+
+  console.log(`[enviar_recordatorio] areaIdsFiltro=${JSON.stringify(areaIdsFiltro)} total=${todosLosPendientes.length} filtrados=${pendientes.length}`)
+
   const colaboradorNombre = String((r as Record<string, unknown>).colaboradorNombre || '')
   const resultados: Body[] = []
   let enviados = 0
@@ -1243,6 +1287,10 @@ Deno.serve(async (req) => {
       case 'forzar_paz_salvo': {
         if (!SA(ses!)) return jsonResp({ ok: false, error: 'Acceso denegado' })
         return jsonResp(await accionForzarPazSalvo(body, ses!))
+      }
+      case 'resetear_aprobaciones': {
+        if (!SA(ses!)) return jsonResp({ ok: false, error: 'Acceso denegado' })
+        return jsonResp(await accionResetearAprobaciones(body, ses!))
       }
       case 'crear_area': {
         if (!SA(ses!)) return jsonResp({ ok: false, error: 'Acceso denegado' })
