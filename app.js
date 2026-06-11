@@ -433,7 +433,11 @@ async function handleLogin() {
     }
 
     _guardarSesion();
-    iniciarApp();
+    // Guard: onAuthStateChange may have already called iniciarApp() synchronously
+    // (before signInWithPassword returned). Skip to avoid double navigateTo().
+    if (!document.getElementById('screen-app').classList.contains('active')) {
+      iniciarApp();
+    }
   } catch(e) {
     errEl.textContent = "Error de conexión. Intenta de nuevo.";
     errEl.classList.add("visible");
@@ -1331,6 +1335,7 @@ function abrirModalCrearColaborador() {
   document.getElementById("modal-colab-title").textContent    = "Nuevo colaborador";
   document.getElementById("colab-nombre").value               = "";
   document.getElementById("colab-cedula").value               = "";
+  document.getElementById("colab-email").value                = "";
   document.getElementById("colab-username").value             = "";
   document.getElementById("colab-password").value             = "";
   document.getElementById("colab-requiere-ps").checked        = true;
@@ -1390,17 +1395,20 @@ async function guardarColaborador() {
   if (!tipoColaborador)   { toast("Selecciona el tipo de colaborador", "error"); return; }
 
   if (!id) {
+    const email    = document.getElementById("colab-email").value.trim().toLowerCase();
     const username = document.getElementById("colab-username").value.trim();
     const password = document.getElementById("colab-password").value;
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Ingresa un correo electrónico válido — es el correo con el que iniciará sesión", "error"); return; }
     if (!username) { toast("El usuario de acceso es obligatorio", "error"); return; }
     if (!password || password.length < 6) { toast("La contraseña debe tener al menos 6 caracteres", "error"); return; }
     const ok = await confirm("Confirmar", `¿Crear colaborador "${nombre}" como ${tipoColaborador.toLowerCase()}?`, "Crear");
     if (!ok) return;
     const rColab = await api("crear_colaborador", { nombre, cedula, requierePazSalvo: requiere, tipoColaborador, nivelEducativo, areasRequeridas });
     if (!rColab.ok) { toast(rColab.error, "error"); return; }
-    const rUser  = await api("crear_usuario", { username, password, rol: "COLABORADOR", areaId: "" });
+    const rUser  = await api("crear_usuario", { username, password, rol: "COLABORADOR", areaId: "", email, cedula });
     if (!rUser.ok) toast(`Colaborador creado pero error al crear usuario: ${rUser.error}`, "error");
-    else toast(`${nombre} creado con usuario "${username}" ✓`, "success");
+    else if (rUser.authCreado === false) toast(`Usuario creado pero sin cuenta de acceso: ${rUser.authError || 'error en Auth'}. Usa "Reset password" en Usuarios para activarla.`, "error");
+    else toast(`${nombre} creado — iniciará sesión con ${email} ✓`, "success");
     cerrarModal("modal-colaborador");
     loadSAColaboradores();
     return;
@@ -2944,39 +2952,47 @@ async function _generarPdfClienteSide(doc) {
   if (!codigo) throw new Error('El documento no tiene código de verificación');
   if (!doc.areas || !doc.areas.length) throw new Error('El documento no contiene áreas aprobadas');
 
-  // ── LOGS DE DIAGNÓSTICO ──────────────────────────────────────────────────────
   console.log('[PDF] ► Colaborador:', nombre, '|', cedula);
-  console.log('[PDF] ► Código verificación:', codigo);
   console.log('[PDF] ► Áreas (' + doc.areas.length + '):', doc.areas.map(a => a.nombre).join(', '));
-  console.log('[PDF] ► ResponsableTH:', doc.responsableTH || '(sin firma)');
-  console.log('[PDF] ► FechaEmisión:', doc.fechaEmision);
-  console.log('[PDF] ► Institución:', doc.institucion);
 
   const logoDataUrl = await _obtenerLogoBase64();
-  console.log('[PDF] ► Logo:', logoDataUrl ? 'OK (' + logoDataUrl.length + ' chars)' : 'NO disponible');
-
   const htmlStr = _generarHtmlCertificado(doc, logoDataUrl);
 
-  // Posicionar el wrapper en las coordenadas de scroll actuales para que
-  // getBCR().left = 0 (el elemento está en el borde izquierdo del viewport)
-  // y html2canvas calcule: captureLeft = 0 + window.scrollX = scrollX = posición
-  // en documento del elemento. Sin este ajuste, un scrollX > 0 desplaza el
-  // origen de captura y recorta el lado izquierdo del certificado.
-  const sx = window.scrollX, sy = window.scrollY;
+  // Guardar estado del scroll y del body para restaurar después
+  const ox = window.scrollX, oy = window.scrollY;
+  const prevOverflow = document.body.style.overflow;
+  const prevHeight   = document.body.style.height;
+
+  // Resetear scroll a (0,0): con position:fixed en top:0/left:0 y scrollX:0 en
+  // html2canvas, captureLeft = getBCR().left + scrollX_opcion = 0 + 0 = 0.
+  // El elemento queda alineado con el origen del canvas → sin recorte lateral.
+  window.scrollTo(0, 0);
+  // Anular overflow:hidden que imponen los modales para que html2canvas
+  // pueda pintar el wrapper aunque esté fuera del viewport del body.
+  document.body.style.overflow = 'visible';
+  document.body.style.height   = 'auto';
+
   const wrapper = document.createElement('div');
-  wrapper.style.cssText = `position:absolute;top:${sy}px;left:${sx}px;width:816px;opacity:0;pointer-events:none;overflow:visible`;
+  // z-index:-9999 oculta el wrapper detrás del fondo del body (invisible al usuario)
+  // sin alterar la opacidad, para que html2canvas capte todos los colores de fondo.
+  // position:fixed+top:0+left:0 garantiza getBCR().left=0 sin importar el scroll histórico.
+  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:816px;z-index:-9999;pointer-events:none;overflow:visible';
   wrapper.innerHTML = htmlStr;
   document.body.appendChild(wrapper);
+
+  // Esperar dos frames para que el layout y los estilos se apliquen
+  await new Promise(r => requestAnimationFrame(r));
   await new Promise(r => requestAnimationFrame(r));
 
   const page = wrapper.querySelector('.page') || wrapper.firstElementChild;
+  console.log('[PDF] ► .page:', page ? page.offsetWidth + 'x' + page.offsetHeight : 'NO encontrado');
 
   try {
     const opt = {
       margin:      0,
       filename:    `PazYSalvo_${nombre.replace(/\s+/g, '_')}.pdf`,
       image:       { type: 'jpeg', quality: 0.98 },
-      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false },
+      html2canvas: { scale: 2, useCORS: true, allowTaint: false, logging: false, scrollX: 0, scrollY: 0 },
       jsPDF:       { unit: 'in', format: 'letter', orientation: 'portrait' },
     };
     const b64Uri = await html2pdf().from(page).set(opt).outputPdf('datauristring');
@@ -2984,6 +3000,9 @@ async function _generarPdfClienteSide(doc) {
     return commaIdx >= 0 ? b64Uri.slice(commaIdx + 1) : b64Uri;
   } finally {
     if (wrapper.parentNode) document.body.removeChild(wrapper);
+    document.body.style.overflow = prevOverflow;
+    document.body.style.height   = prevHeight;
+    window.scrollTo(ox, oy);
   }
 }
 
