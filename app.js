@@ -341,6 +341,35 @@ function resolveConfirm(val) {
   if (STATE.confirmResolve) STATE.confirmResolve(val);
 }
 
+// ── CONFIRM CON CONTRASEÑA ────────────────────────────────
+function confirmConPassword(title, msg, okLabel = "Confirmar") {
+  return new Promise(resolve => {
+    STATE.confirmPwdResolve = resolve;
+    document.getElementById("confirm-pwd-title").textContent = title;
+    document.getElementById("confirm-pwd-msg").innerHTML    = msg;
+    document.getElementById("confirm-pwd-ok-btn").textContent = okLabel;
+    document.getElementById("confirm-pwd-input").value = "";
+    document.getElementById("confirm-pwd-error").style.display = "none";
+    document.getElementById("confirm-pwd-overlay").classList.add("active");
+    setTimeout(() => document.getElementById("confirm-pwd-input").focus(), 100);
+  });
+}
+function resolveConfirmPwd(ok) {
+  if (!ok) {
+    document.getElementById("confirm-pwd-overlay").classList.remove("active");
+    if (STATE.confirmPwdResolve) STATE.confirmPwdResolve(null);
+    return;
+  }
+  const pwd = document.getElementById("confirm-pwd-input").value;
+  if (!pwd) {
+    document.getElementById("confirm-pwd-error").textContent = "Ingresa tu contraseña.";
+    document.getElementById("confirm-pwd-error").style.display = "block";
+    return;
+  }
+  document.getElementById("confirm-pwd-overlay").classList.remove("active");
+  if (STATE.confirmPwdResolve) STATE.confirmPwdResolve(pwd);
+}
+
 // ── MODAL ────────────────────────────────────────────────
 function cerrarModal(id) { document.getElementById(id).classList.remove("active"); }
 function abrirModal(id)  { document.getElementById(id).classList.add("active"); }
@@ -2516,6 +2545,8 @@ function renderVGTable() {
                      <button class="btn-icon-action btn-icon-warn" title="Forzar paz y salvo"
                        onclick="forzarPazSalvo('${c.id}','${esc}')">⚡</button>`
                 }
+                <button class="btn-icon-action btn-icon-danger" title="Resetear aprobaciones"
+                  onclick="resetearAprobaciones('${c.id}','${esc}')">🗑️</button>
               </td>
             </tr>`;
           }).join("")}
@@ -2725,14 +2756,29 @@ async function enviarRecordatorioDesdeModal() {
 // SUPER ADMIN — FORZAR PAZ Y SALVO
 // ═══════════════════════════════════════════════════════
 async function forzarPazSalvo(colaboradorId, nombre) {
-  const ok = await confirm(
+  const password = await confirmConPassword(
     "⚡ Forzar Paz y Salvo",
-    `Esto aprobará <strong>todas las áreas</strong> para <strong>${nombre}</strong> como si cada administrador lo hubiera aprobado. Esta acción queda registrada en los logs.<br><br>¿Confirmas que deseas otorgar el paz y salvo completo?`,
+    `Esto aprobará <strong>todas las áreas</strong> para <strong>${nombre}</strong> como si cada administrador lo hubiera aprobado.<br><br>Esta acción queda registrada en los logs.`,
     "Sí, forzar"
   );
-  if (!ok) return;
+  if (!password) return;
 
-  const r = await api("forzar_paz_salvo", { colaboradorId });
+  const r = await api("forzar_paz_salvo", { colaboradorId, password });
+  if (!r.ok) { toast(r.error, "error"); return; }
+
+  toast(r.mensaje, "success");
+  loadSAGlobal();
+}
+
+async function resetearAprobaciones(colaboradorId, nombre) {
+  const password = await confirmConPassword(
+    "🗑️ Resetear aprobaciones",
+    `Esto eliminará <strong>todas las aprobaciones</strong> de <strong>${nombre}</strong>, dejándolo en estado PENDIENTE en todas sus áreas.<br><br>Esta acción no se puede deshacer.`,
+    "Sí, resetear"
+  );
+  if (!password) return;
+
+  const r = await api("resetear_aprobaciones", { colaboradorId, password });
   if (!r.ok) { toast(r.error, "error"); return; }
 
   toast(r.mensaje, "success");

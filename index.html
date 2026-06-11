@@ -738,6 +738,25 @@
   </div>
 </div>
 
+<!-- Confirm con contraseña (acciones destructivas SUPERADMIN) -->
+<div class="confirm-overlay" id="confirm-pwd-overlay">
+  <div class="confirm-box" style="max-width:400px">
+    <h3 id="confirm-pwd-title">Confirmar acción</h3>
+    <p id="confirm-pwd-msg" style="margin-bottom:1rem"></p>
+    <div class="form-group" style="margin-bottom:1rem">
+      <label class="form-label" style="font-size:0.8rem">Ingresa tu contraseña para confirmar</label>
+      <input type="password" id="confirm-pwd-input" class="form-input"
+             placeholder="••••••••"
+             onkeydown="if(event.key==='Enter') resolveConfirmPwd(true)">
+      <div id="confirm-pwd-error" style="font-size:0.75rem;color:var(--red);margin-top:4px;display:none"></div>
+    </div>
+    <div class="confirm-actions">
+      <button class="btn btn-ghost" onclick="resolveConfirmPwd(false)">Cancelar</button>
+      <button class="btn btn-danger" id="confirm-pwd-ok-btn" onclick="resolveConfirmPwd(true)">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div id="toast-container"></div>
 
