@@ -1330,6 +1330,20 @@ function onChangeTipoColab(tipo) {
   populateColabAreasSelect("", tipo);
 }
 
+// Genera el username con la convención institucional a partir del nombre completo.
+// Formato en BD: "APELLIDO1 APELLIDO2 NOMBRE(S)" → nombre1 + inicial(apellido1) + "." + apellido2
+// Ej: "CALA MORA ANDERSON DAVID" → "andersonc.mora"
+function _generarUsernameDesdeNombre(nombreCompleto) {
+  const limpio = String(nombreCompleto || "")
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")  // quita tildes y ñ→n
+    .replace(/[^a-zA-Z\s]/g, " ")
+    .trim().toLowerCase();
+  const partes = limpio.split(/\s+/).filter(Boolean);
+  if (!partes.length) return "";
+  if (partes.length < 3) return partes.join(".");
+  return partes[2] + partes[0][0] + "." + partes[1];
+}
+
 function abrirModalCrearColaborador() {
   STATE.colabEditId = null;
   document.getElementById("modal-colab-title").textContent    = "Nuevo colaborador";
@@ -1347,10 +1361,14 @@ function abrirModalCrearColaborador() {
   document.getElementById("colab-jefe-group").style.display   = "none";
   document.getElementById("colab-edit-id").value              = "";
   populateColabAreasSelect("", "");
-  document.getElementById("colab-cedula").oninput = function() {
-    if (!document.getElementById("colab-username").value)
-      document.getElementById("colab-username").value = this.value;
+  // Username autogenerado desde el nombre (convención institucional); se detiene si el SA lo edita a mano
+  const unameEl = document.getElementById("colab-username");
+  unameEl.dataset.manual = "";
+  unameEl.oninput = function() { this.dataset.manual = this.value ? "1" : ""; };
+  document.getElementById("colab-nombre").oninput = function() {
+    if (!unameEl.dataset.manual) unameEl.value = _generarUsernameDesdeNombre(this.value);
   };
+  document.getElementById("colab-cedula").oninput = null;
   abrirModal("modal-colaborador");
 }
 
