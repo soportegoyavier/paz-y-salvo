@@ -95,6 +95,13 @@ async function enviarCorreo(
 }
 
 // ─── HELPERS DE NEGOCIO ───────────────────────────────────────────────────────
+async function revocarCodigosColaborador(colaboradorId: string, motivo: 'REVOCADO' | 'REEMPLAZADO') {
+  await supabase.from('ps_codigos_verificacion')
+    .update({ activo: false, motivo_inactivacion: motivo })
+    .eq('colaborador_id', colaboradorId)
+    .eq('activo', true)
+}
+
 async function getAreaIdsDelColaborador(cedula: string): Promise<string[]> {
   if (!cedula) return []
   const c = normCedula(cedula)
@@ -273,6 +280,7 @@ async function accionRechazar(body: Body, ses: SessionData) {
       observaciones, aprobado_por: ses.username, fecha_accion: new Date().toISOString() },
     { onConflict: 'colaborador_id,area_id' }
   )
+  await revocarCodigosColaborador(colaboradorId, 'REVOCADO')
   await log(ses.username, ses.rol, 'RECHAZAR', `Colaborador: ${colaboradorId}`)
   return { ok: true, mensaje: 'Rechazado correctamente' }
 }
@@ -651,6 +659,7 @@ async function accionForzarPazSalvo(body: Body, ses: SessionData) {
     observaciones: '', aprobado_por: ses.username, fecha_accion: new Date().toISOString(),
   }))
   await supabase.from('ps_aprobaciones').upsert(rows, { onConflict: 'colaborador_id,area_id' })
+  await revocarCodigosColaborador(String(body.colaboradorId), 'REEMPLAZADO')
   await log(ses.username, ses.rol, 'FORZAR_PAZ_SALVO', `${c.nombre} — ${areasAll.length} áreas`)
   return { ok: true, mensaje: `Paz y salvo otorgado a ${c.nombre} en ${areasAll.length} área(s)` }
 }
@@ -670,6 +679,7 @@ async function accionResetearAprobaciones(body: Body, ses: SessionData) {
     .delete({ count: 'exact' }).eq('colaborador_id', colaboradorId)
   if (error) return { ok: false, error: error.message }
 
+  await revocarCodigosColaborador(colaboradorId, 'REVOCADO')
   await log(ses.username, ses.rol, 'RESETEAR_APROBACIONES', `${c.nombre} — ${count ?? 0} registros eliminados`)
   return { ok: true, mensaje: `Aprobaciones de ${c.nombre} restablecidas (${count ?? 0} eliminadas)` }
 }
@@ -723,23 +733,13 @@ async function accionGenerarDocumento(body: Body, ses: SessionData) {
   if (!areasReq.length || !areasReq.every(a => aprobadosSet.has(a.id)))
     return { ok: false, error: 'El colaborador no tiene todas las áreas aprobadas' }
 
-  const anoActual = new Date().getFullYear().toString()
-  const { data: codigoExist } = await supabase.from('ps_codigos_verificacion')
-    .select('*').eq('colaborador_id', colaboradorId).eq('activo', true)
-    .gte('fecha_emision', `${anoActual}-01-01`).lt('fecha_emision', `${parseInt(anoActual) + 1}-01-01`)
-    .maybeSingle()
-
-  let codigo: string, fechaEmision: string
-  if (codigoExist) {
-    codigo       = codigoExist.codigo
-    fechaEmision = codigoExist.fecha_emision
-  } else {
-    codigo       = `PSG-${String(c.cedula ?? '').slice(-4)}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`
-    fechaEmision = new Date().toISOString()
-    await supabase.from('ps_codigos_verificacion').insert({
-      codigo, colaborador_id: colaboradorId, activo: true, fecha_emision: fechaEmision,
-    })
-  }
+  // Cada emisión genera un código único. Revocar los anteriores como REEMPLAZADO.
+  await revocarCodigosColaborador(colaboradorId, 'REEMPLAZADO')
+  const codigo       = `PSG-${String(c.cedula ?? '').slice(-4)}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`
+  const fechaEmision = new Date().toISOString()
+  await supabase.from('ps_codigos_verificacion').insert({
+    codigo, colaborador_id: colaboradorId, activo: true, fecha_emision: fechaEmision,
+  })
 
   if (!c.nombre || !c.cedula) return { ok: false, error: 'Datos del colaborador incompletos (nombre o cédula ausentes)' }
   if (!codigo) return { ok: false, error: 'Error generando código de verificación' }
@@ -966,14 +966,47 @@ async function accionDescargarPdf(body: Body, ses: SessionData) {
 async function accionVerificarCodigo(body: Body) {
   const codigo = String(body.codigo || '').trim().toUpperCase()
   if (!codigo) return { ok: false, error: 'Código requerido' }
+
+  // Buscar el código sin filtrar por activo — necesitamos distinguir el motivo
   const { data: entrada } = await supabase.from('ps_codigos_verificacion')
-    .select('*').ilike('codigo', codigo).eq('activo', true).maybeSingle()
+    .select('*').ilike('codigo', codigo).maybeSingle()
   if (!entrada) return { ok: false, valido: false, mensaje: 'Código no válido o inexistente' }
+
+  // Ya inactivo: informar el motivo
+  if (!entrada.activo) {
+    const motivo = String(entrada.motivo_inactivacion ?? 'REVOCADO')
+    if (motivo === 'REEMPLAZADO') {
+      return { ok: true, valido: false, motivo: 'REEMPLAZADO',
+        mensaje: 'Este código ha sido reemplazado por un certificado más reciente. Solicita el documento actualizado.' }
+    }
+    return { ok: true, valido: false, motivo,
+      mensaje: 'Este código ya no está vigente. Las aprobaciones del colaborador fueron modificadas.' }
+  }
+
+  // Verificación en tiempo real del estado de aprobaciones
   const { data: c } = await supabase.from('ps_colaboradores').select('*').eq('id', entrada.colaborador_id).single()
   if (!c) return { ok: false, valido: false, mensaje: 'Datos no encontrados' }
+
+  const { data: areasAll } = await supabase.from('ps_areas').select('*').eq('activo', true)
+  const { data: aprobs }   = await supabase.from('ps_aprobaciones').select('*').eq('colaborador_id', c.id)
+  const areasOmit  = new Set(await getAreaIdsDelColaborador(String(c.cedula ?? '')))
+  const areasReq   = getAreasRequeridas(c, areasAll ?? []).filter(a => !areasOmit.has(a.id))
+  const aprobados  = new Set((aprobs ?? []).filter(a => a.estado === 'APROBADO').map(a => a.area_id))
+  const completo   = c.requiere_paz_salvo && areasReq.length > 0 && areasReq.every(a => aprobados.has(a.id))
+
+  if (!completo) {
+    // Auto-revocar: el estado actual no sostiene el paz y salvo
+    await revocarCodigosColaborador(String(c.id), 'REVOCADO')
+    await log('SISTEMA', 'VERIFICACION', 'AUTO_REVOCAR_CODIGO', `Código: ${codigo} — ${c.nombre}`)
+    return { ok: true, valido: false, motivo: 'REVOCADO',
+      mensaje: 'Este código ya no está vigente. El colaborador no tiene todas las áreas aprobadas actualmente.' }
+  }
+
   await log('PÚBLICO', 'VERIFICACION', 'VERIFICAR_CODIGO', `Código: ${codigo}`)
-  return { ok: true, valido: true, datos: { nombre: c.nombre, cedula: c.cedula,
-    estado: 'PAZ Y SALVO COMPLETO', fechaEmision: entrada.fecha_emision, codigo: entrada.codigo } }
+  return { ok: true, valido: true, datos: {
+    nombre: c.nombre, cedula: c.cedula,
+    estado: 'PAZ Y SALVO COMPLETO', fechaEmision: entrada.fecha_emision, codigo: entrada.codigo,
+  }}
 }
 
 // ─── RECORDATORIO / SOLICITUD TH ─────────────────────────────────────────────
