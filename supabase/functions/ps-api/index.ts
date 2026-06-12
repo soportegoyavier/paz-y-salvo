@@ -1040,12 +1040,23 @@ async function accionGetPendientesRecordatorio(body: Body, ses: SessionData) {
   const areasOmit  = new Set(await getAreaIdsDelColaborador(String(c.cedula)))
   const aprobSet   = new Set((aprobs ?? []).filter(a => a.estado === 'APROBADO').map(a => a.area_id))
 
+  // Mapa cedula → nombre completo para los admins
+  const cedulasAdmins = (usuarios ?? []).map(u => u.cedula).filter(Boolean)
+  const { data: colabsAdmins } = cedulasAdmins.length
+    ? await supabase.from('ps_colaboradores').select('cedula, nombre').in('cedula', cedulasAdmins)
+    : { data: [] }
+  const nombrePorCedula: Record<string, string> = {}
+  for (const ca of colabsAdmins ?? []) nombrePorCedula[String(ca.cedula)] = String(ca.nombre)
+
   const pendientes = getAreasRequeridas(c, areasAll ?? [])
     .filter(area => !aprobSet.has(area.id) && !areasOmit.has(area.id))
     .map(area => {
       const admin = (usuarios ?? []).find(u => (u.area_ids ?? []).includes(area.id))
+      const adminNombre = admin
+        ? (admin.cedula ? (nombrePorCedula[String(admin.cedula)] ?? admin.username) : admin.username)
+        : null
       return { areaId: String(area.id), areaNombre: area.nombre,
-               adminNombre: admin ? admin.username : null,
+               adminNombre,
                adminEmail: admin?.email || null,
                tieneCorreo: !!(admin?.email) }
     })
@@ -1077,11 +1088,19 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
     const res = await enviarCorreo(
       adminEmail,
       `Recordatorio de Paz y Salvo — ${colaboradorNombre}`,
-      `<p>Estimado/a <strong>${p.adminNombre || 'Jefe de Área'}</strong>:</p>
-       <p>Le recordamos que <strong>${colaboradorNombre}</strong> tiene pendiente su paz y salvo en el área <strong>${p.areaNombre}</strong>.</p>
-       <p>Por favor ingrese al sistema y gestione la solicitud a la brevedad.</p>
-       <hr style="margin:16px 0;border:none;border-top:1px solid #eee">
-       <p style="color:#888;font-size:12px">Sistema de Paz y Salvo — Colegio Campestre Goyavier</p>`
+      `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
+         <p>Estimado/a <strong>${p.adminNombre || 'Jefe de Área'}</strong>:</p>
+         <p>Le recordamos que <strong>${colaboradorNombre}</strong> tiene pendiente su paz y salvo en el área <strong>${p.areaNombre}</strong>.</p>
+         <p>Por favor ingrese al sistema y gestione la solicitud a la brevedad.</p>
+         <p style="text-align:center;margin:24px 0">
+           <a href="https://pazysalvo.netlify.app"
+              style="background:#1e3a5f;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;font-size:15px;display:inline-block">
+             Ir al Sistema de Paz y Salvo
+           </a>
+         </p>
+         <hr style="margin:16px 0;border:none;border-top:1px solid #eee">
+         <p style="color:#888;font-size:12px">Sistema de Paz y Salvo — Colegio Campestre Goyavier</p>
+       </div>`
     )
     if (res.ok) enviados++
     resultados.push({ nombre: p.areaNombre, adminEmail, enviado: res.ok, error: res.error ?? null })
@@ -1226,8 +1245,13 @@ Deno.serve(async (req) => {
 
       // Cualquier sesión activa
       case 'verify_session': {
-        const { data: uVS } = await supabase.from('ps_usuarios').select('cambiar_password').eq('id', ses!.usuarioId).maybeSingle()
-        return jsonResp({ ok: true, rol: ses!.rol, username: ses!.username, cambiarPassword: uVS?.cambiar_password ?? false })
+        const { data: uVS } = await supabase.from('ps_usuarios').select('cambiar_password, cedula').eq('id', ses!.usuarioId).maybeSingle()
+        let nombreCompleto: string | null = null
+        if (uVS?.cedula) {
+          const { data: colVS } = await supabase.from('ps_colaboradores').select('nombre').eq('cedula', uVS.cedula).maybeSingle()
+          nombreCompleto = colVS?.nombre ?? null
+        }
+        return jsonResp({ ok: true, rol: ses!.rol, username: ses!.username, nombre: nombreCompleto, cambiarPassword: uVS?.cambiar_password ?? false })
       }
       case 'get_mi_estado':               return jsonResp(await accionGetMiEstado(body))
       case 'cambiar_password':            return jsonResp(await accionCambiarPassword(body, ses!))

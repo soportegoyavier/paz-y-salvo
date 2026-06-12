@@ -200,6 +200,7 @@ async function _iniciarDesdeSession(session) {
     const tok = session.access_token;
     const [rv, areasR] = await Promise.all([api("verify_session", {}, tok), api("get_areas", {}, tok)]);
     if (rv.ok) {
+      STATE.nombreCompleto = rv.nombre || null;
       if (areasR.ok) {
         STATE.areasDisponibles = areasR.areas;
         STATE.areaNombres = {};
@@ -434,7 +435,7 @@ async function handleLogin() {
       _resetBtn(); return;
     }
 
-    // Obtener estado completo desde el backend (incluye cambiarPassword)
+    // Obtener estado completo desde el backend (incluye cambiarPassword y nombre)
     const vsR = await api("verify_session");
     if (!vsR.ok) {
       await supabaseClient.auth.signOut();
@@ -442,6 +443,8 @@ async function handleLogin() {
       errEl.classList.add("visible");
       _resetBtn(); return;
     }
+
+    STATE.nombreCompleto = vsR.nombre || null;
 
     if (vsR.cambiarPassword) {
       document.getElementById("pl-actual").value    = "";
@@ -479,7 +482,7 @@ function handleLogout() {
   _limpiarSesionLocal();
   STATE = { rol:null, username:null, areaId:null, areaNombre:null,
             areaIds:[], areaNombres:{}, currentAreaId:null, areaColabs:{},
-            cedulaPropia:null, email:null,
+            cedulaPropia:null, email:null, nombreCompleto:null,
             areaColaboradores:[], areaFilter:"todos", areasDisponibles:[],
             colabEditId:null, userEditId:null, gestionarColabId:null,
             confirmResolve:null, saColaboradores:[], saSelectedIds: new Set(),
@@ -587,7 +590,7 @@ function iniciarApp() {
   document.getElementById("screen-login").classList.remove("active");
   document.getElementById("screen-app").classList.add("active");
 
-  document.getElementById("header-username").textContent = STATE.username;
+  document.getElementById("header-username").textContent = STATE.nombreCompleto || STATE.username;
   const badge = document.getElementById("header-role-badge");
   const rv = rolVista();
   if (rv === "ADMIN_COMBINED") {
