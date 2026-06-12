@@ -1,3 +1,9 @@
 ﻿desktop.ini
 Thumbs.db
 .DS_Store
+
+# Tests QA
+tests/.env.test
+tests/node_modules/
+tests/playwright-report/
+tests/test-results/

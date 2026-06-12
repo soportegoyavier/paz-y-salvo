@@ -1,0 +1,163 @@
+name: QA — Paz y Salvo (Supabase Staging)
+
+on:
+  push:
+    branches: [main, staging, develop]
+    paths:
+      - 'app.js'
+      - 'index.html'
+      - 'styles.css'
+      - 'supabase/functions/**'
+      - 'tests/**'
+  pull_request:
+    branches: [main, staging]
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite a ejecutar (all, A, B, C, D, E, F, G, H, I, J)'
+        required: false
+        default: 'all'
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ── Seed de datos en staging ─────────────────────────────────────────────────
+  seed:
+    name: Seed datos QA
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: tests/package.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Crear .env.test
+        run: |
+          cat > .env.test << EOF
+          STAGING_URL=${{ secrets.STAGING_URL }}
+          STAGING_ANON_KEY=${{ secrets.STAGING_ANON_KEY }}
+          STAGING_SERVICE_KEY=${{ secrets.STAGING_SERVICE_KEY }}
+          APP_URL=${{ secrets.STAGING_APP_URL }}
+          TEST_PREFIX=QA_TEST_
+          EOF
+
+      - name: Seed
+        run: node scripts/seed.js
+
+  # ── Tests E2E ─────────────────────────────────────────────────────────────────
+  e2e:
+    name: E2E — ${{ matrix.suite }}
+    needs: seed
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - A_flujo_basico
+          - B_flujo_aprobacion
+          - C_autoexclusion
+          - D_multiples_areas
+          - E_vista_administrativa
+          - F_pdfs_actas
+          - G_correos_recordatorio
+          - H_seguridad_rls
+          - I_concurrencia
+          - J_rendimiento
+    defaults:
+      run:
+        working-directory: tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: tests/package.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Instalar Playwright Browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Crear .env.test
+        run: |
+          cat > .env.test << EOF
+          STAGING_URL=${{ secrets.STAGING_URL }}
+          STAGING_ANON_KEY=${{ secrets.STAGING_ANON_KEY }}
+          STAGING_SERVICE_KEY=${{ secrets.STAGING_SERVICE_KEY }}
+          APP_URL=${{ secrets.STAGING_APP_URL }}
+          TEST_PREFIX=QA_TEST_
+          EOF
+
+      - name: Ejecutar suite ${{ matrix.suite }}
+        run: npx playwright test specs/${{ matrix.suite }}.spec.ts --reporter=github,html
+        env:
+          CI: true
+
+      - name: Subir reporte HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.suite }}
+          path: tests/playwright-report/
+          retention-days: 14
+
+      - name: Subir resultados JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.suite }}
+          path: tests/test-results/junit.xml
+          retention-days: 14
+
+      - name: Subir capturas y videos de fallos
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failures-${{ matrix.suite }}
+          path: |
+            tests/test-results/**/*.png
+            tests/test-results/**/*.webm
+            tests/test-results/**/*.pdf
+          retention-days: 7
+
+  # ── Limpieza de datos QA ──────────────────────────────────────────────────────
+  cleanup:
+    name: Limpiar datos QA
+    needs: e2e
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: tests/package.json
+      - run: npm ci
+      - name: Crear .env.test
+        run: |
+          cat > .env.test << EOF
+          STAGING_URL=${{ secrets.STAGING_URL }}
+          STAGING_ANON_KEY=${{ secrets.STAGING_ANON_KEY }}
+          STAGING_SERVICE_KEY=${{ secrets.STAGING_SERVICE_KEY }}
+          APP_URL=${{ secrets.STAGING_APP_URL }}
+          EOF
+      - name: Limpiar datos QA de staging
+        run: node scripts/seed.js --clean

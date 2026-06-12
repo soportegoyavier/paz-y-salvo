@@ -1,0 +1,21 @@
+{
+  "name": "paz-y-salvo-qa",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve":            "node staging-server.js",
+    "test":             "playwright test",
+    "test:headed":      "playwright test --headed",
+    "test:ui":          "playwright test --ui",
+    "test:report":      "playwright show-report",
+    "seed":             "node scripts/seed.js",
+    "seed:clean":       "node scripts/seed.js --clean",
+    "test:ci":          "playwright test --reporter=github,html"
+  },
+  "devDependencies": {
+    "@playwright/test":     "^1.44.0",
+    "@supabase/supabase-js": "^2.43.0",
+    "dotenv":               "^16.4.5",
+    "pdf-parse":            "^1.1.1"
+  }
+}

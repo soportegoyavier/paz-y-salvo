@@ -1,0 +1,93 @@
+{
+  "_nota": "Credenciales de staging. Nunca commits de .env.test con las contraseñas reales.",
+  "roles": {
+    "colaborador_docente": {
+      "username":  "qa_colab_docente",
+      "email":     "qa_colab_docente@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "COLABORADOR",
+      "cedula":    "QA0000001",
+      "area_ids":  [],
+      "tipo_colaborador": "DOCENTE",
+      "nivel_educativo":  "PRIMARIA"
+    },
+    "colaborador_admin": {
+      "username":  "qa_colab_admin",
+      "email":     "qa_colab_admin@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "COLABORADOR",
+      "cedula":    "QA0000002",
+      "area_ids":  [],
+      "tipo_colaborador": "ADMINISTRATIVO",
+      "nivel_educativo":  ""
+    },
+    "colaborador_servicios": {
+      "username":  "qa_colab_servicios",
+      "email":     "qa_colab_servicios@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "COLABORADOR",
+      "cedula":    "QA0000003",
+      "area_ids":  [],
+      "tipo_colaborador": "SERVICIOS_GENERALES",
+      "nivel_educativo":  ""
+    },
+    "jefe_area_matematicas": {
+      "username":  "qa_jefe_matematicas",
+      "email":     "qa_jefe_matematicas@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "ADMIN",
+      "cedula":    "QA0000004",
+      "area_ids":  ["__AREA_MATEMATICAS__"],
+      "tipo_colaborador": "DOCENTE",
+      "nivel_educativo":  "SECUNDARIA"
+    },
+    "responsable_biblioteca": {
+      "username":  "qa_resp_biblioteca",
+      "email":     "qa_resp_biblioteca@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "ADMIN",
+      "cedula":    "QA0000005",
+      "area_ids":  ["__AREA_BIBLIOTECA__"],
+      "tipo_colaborador": "ADMINISTRATIVO",
+      "nivel_educativo":  ""
+    },
+    "responsable_tecnologia_y_biblioteca": {
+      "username":  "qa_resp_tec_bib",
+      "email":     "qa_resp_tec_bib@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "ADMIN",
+      "cedula":    "QA0000006",
+      "area_ids":  ["__AREA_TECNOLOGIA__", "__AREA_BIBLIOTECA__"],
+      "tipo_colaborador": "ADMINISTRATIVO",
+      "nivel_educativo":  ""
+    },
+    "talento_humano": {
+      "username":  "qa_talento_humano",
+      "email":     "qa_talento_humano@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "ADMIN",
+      "cedula":    "QA0000007",
+      "area_ids":  ["__AREA_TALENTO_HUMANO__"],
+      "tipo_colaborador": "ADMINISTRATIVO",
+      "nivel_educativo":  ""
+    },
+    "coordinacion_administrativa": {
+      "username":  "qa_coord_admin",
+      "email":     "qa_coord_admin@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "ADMIN",
+      "cedula":    "QA0000008",
+      "area_ids":  ["__AREA_COORD_ADMIN__"],
+      "tipo_colaborador": "ADMINISTRATIVO",
+      "nivel_educativo":  ""
+    },
+    "super_admin": {
+      "username":  "qa_superadmin",
+      "email":     "qa_superadmin@goyavier.test",
+      "password":  "QA_Test_2026!",
+      "rol":       "SUPERADMIN",
+      "cedula":    "QA9999999",
+      "area_ids":  []
+    }
+  }
+}
