@@ -3150,21 +3150,35 @@ async function verificarCodigo() {
   resultEl.style.display = "block";
 
   if (r.ok && r.valido) {
+    const fecha = (() => { try { return new Date(r.datos.fechaEmision).toLocaleDateString("es-CO", { year:"numeric", month:"long", day:"numeric" }); } catch { return r.datos.fechaEmision; } })();
     resultEl.className = "verify-result valid";
     resultEl.innerHTML = `
       <div class="verify-result-title">✓ Código válido — Paz y Salvo auténtico</div>
       <div class="verify-row"><span>Nombre:</span> ${r.datos.nombre}</div>
       <div class="verify-row"><span>Cédula:</span> ${r.datos.cedula}</div>
       <div class="verify-row"><span>Estado:</span> ${r.datos.estado}</div>
-      <div class="verify-row"><span>Emisión:</span> ${r.datos.fechaEmision}</div>
+      <div class="verify-row"><span>Emisión:</span> ${fecha}</div>
       <div class="verify-row"><span>Código:</span> <span style="font-family:var(--font-mono)">${r.datos.codigo}</span></div>
+    `;
+  } else if (r.ok && !r.valido && r.motivo === "REEMPLAZADO") {
+    resultEl.className = "verify-result invalid";
+    resultEl.style.borderColor = "var(--yellow, #f59e0b)";
+    resultEl.innerHTML = `
+      <div class="verify-result-title" style="color:var(--yellow,#b45309)">⚠ Código reemplazado</div>
+      <div style="font-size:0.875rem; color:var(--text2)">${r.mensaje}</div>
+    `;
+  } else if (r.ok && !r.valido && r.motivo) {
+    resultEl.className = "verify-result invalid";
+    resultEl.innerHTML = `
+      <div class="verify-result-title">✗ Código revocado</div>
+      <div style="font-size:0.875rem; color:var(--text2)">${r.mensaje}</div>
     `;
   } else {
     resultEl.className = "verify-result invalid";
     resultEl.innerHTML = `
       <div class="verify-result-title">✗ Código no válido</div>
       <div style="font-size:0.875rem; color:var(--text2)">
-        El código ingresado no corresponde a ningún paz y salvo registrado o ha sido desactivado.
+        ${r.mensaje || "El código ingresado no corresponde a ningún paz y salvo registrado."}
       </div>
     `;
   }
