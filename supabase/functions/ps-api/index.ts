@@ -733,13 +733,23 @@ async function accionGenerarDocumento(body: Body, ses: SessionData) {
   if (!areasReq.length || !areasReq.every(a => aprobadosSet.has(a.id)))
     return { ok: false, error: 'El colaborador no tiene todas las áreas aprobadas' }
 
-  // Cada emisión genera un código único. Revocar los anteriores como REEMPLAZADO.
-  await revocarCodigosColaborador(colaboradorId, 'REEMPLAZADO')
-  const codigo       = `PSG-${String(c.cedula ?? '').slice(-4)}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`
-  const fechaEmision = new Date().toISOString()
-  await supabase.from('ps_codigos_verificacion').insert({
-    codigo, colaborador_id: colaboradorId, activo: true, fecha_emision: fechaEmision,
-  })
+  // Reusar el código activo si ya existe — solo genera uno nuevo cuando no hay ninguno activo.
+  // El código se revoca automáticamente en rechazar/resetear/forzar, garantizando
+  // que PDF descargado, preview y correo enviado siempre muestren el mismo código.
+  const { data: codigoExist } = await supabase.from('ps_codigos_verificacion')
+    .select('*').eq('colaborador_id', colaboradorId).eq('activo', true).maybeSingle()
+
+  let codigo: string, fechaEmision: string
+  if (codigoExist) {
+    codigo       = codigoExist.codigo
+    fechaEmision = codigoExist.fecha_emision
+  } else {
+    codigo       = `PSG-${String(c.cedula ?? '').slice(-4)}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`
+    fechaEmision = new Date().toISOString()
+    await supabase.from('ps_codigos_verificacion').insert({
+      codigo, colaborador_id: colaboradorId, activo: true, fecha_emision: fechaEmision,
+    })
+  }
 
   if (!c.nombre || !c.cedula) return { ok: false, error: 'Datos del colaborador incompletos (nombre o cédula ausentes)' }
   if (!codigo) return { ok: false, error: 'Error generando código de verificación' }
