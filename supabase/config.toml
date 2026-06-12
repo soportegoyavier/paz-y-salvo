@@ -1,0 +1,22 @@
+[api]
+enabled = true
+
+[db]
+port = 5432
+shadow_port = 5433
+major_version = 15
+
+[studio]
+enabled = true
+
+[inbucket]
+enabled = true
+
+[auth]
+enabled = true
+
+[edge_runtime]
+enabled = true
+
+[functions.ps-api]
+verify_jwt = true
