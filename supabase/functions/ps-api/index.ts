@@ -766,7 +766,7 @@ async function accionGenerarDocumento(body: Body, ses: SessionData) {
 
   if (!areas.length) return { ok: false, error: 'No se encontraron áreas certificadas para el documento' }
 
-  const institucion  = await getConfig('INSTITUCION_NOMBRE')  || 'Colegio Campestre Goyavier'
+  const institucion  = await getConfig('INSTITUCION_NOMBRE')  || 'Proyectarte Ltda'
   const responsableTH = await getConfig('NOMBRE_RESPONSABLE_TH') || ''
   await log(ses.username, ses.rol, 'GENERAR_DOCUMENTO', `${c.nombre} (${c.cedula}) — ${codigo}`)
   return { ok: true, documento: { colaboradorId, nombre: String(c.nombre), cedula: String(c.cedula),
@@ -846,7 +846,7 @@ async function _generarCertificadoPdf(doc: Record<string, unknown>): Promise<str
   page.drawText(institucion.toUpperCase(), {
     x: M, y: H-HDR+HDR/2+5, size: 12.75, font: Hbold, color: navy, characterSpacing: 0.5
   })
-  page.drawText('Institución Educativa Privada  ·  Floridablanca, Santander', {
+  page.drawText('Floridablanca, Santander', {
     x: M, y: H-HDR+HDR/2-11, size: 8.25, font: Hreg, color: grayAA
   })
 
@@ -887,7 +887,7 @@ async function _generarCertificadoPdf(doc: Record<string, unknown>): Promise<str
   cy = pbY - 12
 
   // Texto del certificado (con ajuste de línea)
-  const cTxt = `Se encuentra a PAZ Y SALVO con todas las dependencias de la Institución Educativa ${institucion}, habiendo cumplido satisfactoriamente con todos los requerimientos establecidos en el proceso de certificación de retiro y desvinculación institucional.`
+  const cTxt = `Se encuentra a PAZ Y SALVO con todas las dependencias de ${institucion}, habiendo cumplido satisfactoriamente con todos los requerimientos establecidos en el proceso de certificación de retiro y desvinculación institucional.`
   for (const ln of wrap(cTxt, Hreg, 9, CW)) {
     cy -= 13.5
     page.drawText(ln, { x: M, y: cy, size: 9, font: Hreg, color: gray44 })
