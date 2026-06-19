@@ -1245,7 +1245,7 @@ function renderSAColaboradoresTable() {
         ${lista.map(c => {
           const escapedNombre    = c.nombre.replace(/'/g,"\\'");
           const escapedAreasReq  = (c.areasRequeridas || "").replace(/'/g,"\\'");
-          const tipoLabel = { DOCENTE: "Docente", ADMINISTRATIVO: "Administrativo", SERVICIOS: "Servicios" }[c.tipoColaborador] || "—";
+          const tipoLabel = { DOCENTE: "Académica", ADMINISTRATIVO: "Administrativa", SERVICIOS: "Operativa" }[c.tipoColaborador] || "—";
           const tipoColor = { DOCENTE: "var(--blue)", ADMINISTRATIVO: "var(--green)", SERVICIOS: "var(--yellow)" }[c.tipoColaborador] || "var(--text2)";
           return `
           <tr class="${STATE.saSelectedIds.has(c.id) ? "row-selected" : ""}">
@@ -2445,9 +2445,9 @@ async function loadSAGlobal() {
         style="padding:5px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);
                color:var(--text1);font-size:0.82rem;cursor:pointer">
         <option value="todos">Todos (${total})</option>
-        <option value="ADMINISTRATIVO">Administrativos (${nAdmin})</option>
-        <option value="DOCENTE">Académicos (${nDoc})</option>
-        <option value="SERVICIOS">Servicios (${nServ})</option>
+        <option value="ADMINISTRATIVO">Administrativa (${nAdmin})</option>
+        <option value="DOCENTE">Académica (${nDoc})</option>
+        <option value="SERVICIOS">Operativa (${nServ})</option>
       </select>
       <button class="btn btn-ghost btn-sm" onclick="loadSAGlobal()" style="margin-left:auto">↻</button>
     </div>
