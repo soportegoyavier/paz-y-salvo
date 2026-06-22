@@ -542,6 +542,30 @@ async function handleCambiarPasswordPrimerLogin() {
   iniciarApp();
 }
 
+async function solicitarPasswordDefault() {
+  const btn    = document.getElementById("pl-btn-solicitar");
+  const errEl  = document.getElementById("pl-error");
+  errEl.classList.remove("visible");
+  btn.disabled = true;
+  btn.textContent = "Enviando...";
+
+  const r = await api("solicitar_password_default");
+
+  btn.disabled = false;
+  btn.textContent = "¿No recuerdas tu contraseña temporal? Solicítala a tu correo";
+
+  if (r.ok) {
+    errEl.style.color = "var(--success, #16a34a)";
+    errEl.textContent = r.mensaje || "Contraseña temporal enviada. Revisa tu correo.";
+    errEl.classList.add("visible");
+    document.getElementById("pl-actual").value = "";
+  } else {
+    errEl.style.color = "";
+    errEl.textContent = r.error || "No se pudo enviar el correo.";
+    errEl.classList.add("visible");
+  }
+}
+
 // ── LOGIN CON GOOGLE — usa Supabase Auth OAuth (redirección) ─────────────────
 async function handleLoginGoogle() {
   const errEl = document.getElementById("login-error");

@@ -95,6 +95,48 @@ async function enviarCorreo(
 }
 
 // ─── HELPERS DE NEGOCIO ───────────────────────────────────────────────────────
+function generarPasswordDefault(): string {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+  let pwd = ''
+  const arr = new Uint8Array(8)
+  crypto.getRandomValues(arr)
+  for (const b of arr) pwd += chars[b % chars.length]
+  return pwd
+}
+
+async function emailCredenciales(to: string, username: string, password: string): Promise<void> {
+  await enviarCorreo(
+    to,
+    'Credenciales de acceso — Sistema de Paz y Salvo',
+    `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
+       <h2 style="color:#1e3a5f;margin-bottom:0.5rem">Sistema de Paz y Salvo</h2>
+       <p style="color:#475569;margin-bottom:1.25rem">Colegio Campestre Goyavier</p>
+       <p>Tu cuenta de acceso está lista. Usa estas credenciales para ingresar:</p>
+       <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:15px">
+         <tr>
+           <td style="padding:10px 14px;background:#f1f5f9;font-weight:bold;border:1px solid #e2e8f0;width:45%">Usuario</td>
+           <td style="padding:10px 14px;border:1px solid #e2e8f0;font-family:monospace">${username}</td>
+         </tr>
+         <tr>
+           <td style="padding:10px 14px;background:#f1f5f9;font-weight:bold;border:1px solid #e2e8f0">Contraseña temporal</td>
+           <td style="padding:10px 14px;border:1px solid #e2e8f0;font-family:monospace;font-size:16px;letter-spacing:1px">${password}</td>
+         </tr>
+       </table>
+       <p style="color:#dc2626;font-size:0.875rem;margin-bottom:1.5rem">
+         <strong>Al ingresar por primera vez deberás cambiar esta contraseña temporal.</strong>
+       </p>
+       <p style="text-align:center;margin:24px 0">
+         <a href="https://pazysalvo.netlify.app"
+            style="background:#1e3a5f;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;font-size:15px;display:inline-block">
+           Iniciar sesión
+         </a>
+       </p>
+       <hr style="margin:16px 0;border:none;border-top:1px solid #eee">
+       <p style="color:#888;font-size:12px">Sistema de Paz y Salvo — Colegio Campestre Goyavier</p>
+     </div>`
+  )
+}
+
 async function revocarCodigosColaborador(colaboradorId: string, motivo: 'REVOCADO' | 'REEMPLAZADO') {
   await supabase.from('ps_codigos_verificacion')
     .update({ activo: false, motivo_inactivacion: motivo })
@@ -454,7 +496,7 @@ async function accionCrearUsuario(body: Body, ses: SessionData) {
   const { data: newUser, error: dbError } = await supabase.from('ps_usuarios').insert({
     username: username.trim(), password_hash: '', legacy_hash: '', rol,
     area_ids: areaIds, email: email.toLowerCase().trim(),
-    cedula: cedula || '', activo: true, cambiar_password: false,
+    cedula: cedula || '', activo: true, cambiar_password: true,
   }).select('id').single()
   if (dbError) return { ok: false, error: dbError.message }
 
@@ -469,6 +511,11 @@ async function accionCrearUsuario(body: Body, ses: SessionData) {
   } else if (authError) {
     // No revertir el ps_usuarios — SA puede vincular manualmente con resetear_password
     console.warn('[crear_usuario] Auth error:', authError.message)
+  }
+
+  // Enviar credenciales al usuario
+  if (isValidEmail(email)) {
+    await emailCredenciales(email.toLowerCase().trim(), username.trim(), password)
   }
 
   await log(ses.username, ses.rol, 'CREAR_USUARIO', `${username} (${rol})`)
@@ -494,7 +541,7 @@ async function accionResetearPassword(body: Body, ses: SessionData) {
   if (!id || !nuevaPassword) return { ok: false, error: 'ID y contraseña son requeridos' }
   if (nuevaPassword.length < 6) return { ok: false, error: 'La contraseña debe tener al menos 6 caracteres' }
 
-  const { data: u } = await supabase.from('ps_usuarios').select('auth_user_id, email').eq('id', id).single()
+  const { data: u } = await supabase.from('ps_usuarios').select('auth_user_id, email, username').eq('id', id).single()
   if (!u) return { ok: false, error: 'Usuario no encontrado' }
 
   if (u.auth_user_id) {
@@ -512,8 +559,34 @@ async function accionResetearPassword(body: Body, ses: SessionData) {
   }
 
   await supabase.from('ps_usuarios').update({ cambiar_password: true }).eq('id', id)
+
+  // Enviar nueva contraseña temporal al usuario
+  if (u.email && isValidEmail(u.email)) {
+    await emailCredenciales(u.email, u.username, nuevaPassword)
+  }
+
   await log(ses.username, ses.rol, 'RESET_PASSWORD', `ID: ${id}`)
   return { ok: true, mensaje: 'Contraseña restablecida correctamente' }
+}
+
+async function accionSolicitarPasswordDefault(ses: SessionData) {
+  const { data: u } = await supabase.from('ps_usuarios')
+    .select('email, username, auth_user_id')
+    .eq('id', ses.usuarioId).single()
+  if (!u) return { ok: false, error: 'Usuario no encontrado' }
+  if (!u.email || !isValidEmail(u.email))
+    return { ok: false, error: 'No tienes un correo válido registrado. Contacta al administrador.' }
+  if (!u.auth_user_id)
+    return { ok: false, error: 'Tu cuenta aún no está vinculada. Contacta al administrador.' }
+
+  const nuevaPassword = generarPasswordDefault()
+  const { error } = await supabase.auth.admin.updateUserById(u.auth_user_id, { password: nuevaPassword })
+  if (error) return { ok: false, error: error.message }
+
+  await supabase.from('ps_usuarios').update({ cambiar_password: true }).eq('id', ses.usuarioId)
+  await emailCredenciales(u.email, u.username, nuevaPassword)
+  await log(ses.username, ses.rol, 'SOLICITAR_PASSWORD_DEFAULT', 'Contraseña temporal enviada por correo')
+  return { ok: true, mensaje: `Se envió la contraseña temporal a ${u.email}` }
 }
 
 async function accionCambiarPassword(body: Body, ses: SessionData) {
@@ -1255,6 +1328,7 @@ Deno.serve(async (req) => {
       }
       case 'get_mi_estado':               return jsonResp(await accionGetMiEstado(body))
       case 'cambiar_password':            return jsonResp(await accionCambiarPassword(body, ses!))
+      case 'solicitar_password_default':  return jsonResp(await accionSolicitarPasswordDefault(ses!))
       case 'get_pendientes_recordatorio': return jsonResp(await accionGetPendientesRecordatorio(body, ses!))
       case 'enviar_recordatorio':         return jsonResp(await accionEnviarRecordatorio(body, ses!))
       case 'enviar_solicitud_th':         return jsonResp(await accionEnviarSolicitudTH(body, ses!))
