@@ -59,9 +59,14 @@
       <input type="password" id="pl-confirmar" class="form-input" placeholder="Repite la nueva contraseña" autocomplete="new-password">
     </div>
     <div class="login-error" id="pl-error"></div>
-    <div class="modal-footer" style="margin-top:1.25rem;padding:0;border:none">
+    <div class="modal-footer" style="margin-top:1.25rem;padding:0;border:none;flex-direction:column;gap:0.75rem">
       <button class="btn btn-primary" style="width:100%" onclick="handleCambiarPasswordPrimerLogin()" id="pl-btn">
         Guardar y continuar
+      </button>
+      <button type="button" id="pl-btn-solicitar"
+              style="background:none;border:none;color:var(--text-secondary,#64748b);font-size:0.8rem;cursor:pointer;padding:4px 0;text-decoration:underline;width:100%"
+              onclick="solicitarPasswordDefault()">
+        ¿No recuerdas tu contraseña temporal? Solicítala a tu correo
       </button>
     </div>
   </div>
