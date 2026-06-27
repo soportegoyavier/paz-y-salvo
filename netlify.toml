@@ -1,0 +1,7 @@
+[[headers]]
+for = "/*"
+[headers.values]
+  X-Content-Type-Options = "nosniff"
+  Referrer-Policy = "no-referrer"
+  Permissions-Policy = "geolocation=(), camera=(), microphone=()"
+  Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://ihzgfcojethwxphbnlmg.supabase.co; connect-src 'self' https://ihzgfcojethwxphbnlmg.supabase.co https://accounts.google.com; frame-ancestors https://portal-goyavier.netlify.app"

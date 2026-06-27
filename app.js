@@ -1,6 +1,10 @@
 ﻿// ── CONFIG ──────────────────────────────────────────────
 const BACKEND_URL = "https://ihzgfcojethwxphbnlmg.supabase.co/functions/v1/ps-api";
 
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 // Supabase Auth — usar solo la clave pública (anon), NUNCA la service_role aquí
 const SUPABASE_URL      = "https://ihzgfcojethwxphbnlmg.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloemdmY29qZXRod3hwaGJubG1nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1ODY2MTAsImV4cCI6MjA5NjE2MjYxMH0.SQgh4URnY-I48yON3ogX4x6t2git5SRND35Vh-EV_og"; // Dashboard → Settings → API → anon public key
@@ -108,6 +112,58 @@ async function _obtenerLogoBase64() {
   };
 
   document.addEventListener("DOMContentLoaded", async function() {
+    // ── Callback del popup de login de Google ──
+    // Con flowType:'implicit', Google devuelve #access_token=... en el hash.
+    // El popup guarda la sesión directamente en localStorage usando un cliente
+    // temporal de Supabase. La ventana principal detecta el cambio automáticamente
+    // vía onAuthStateChange (supabase-js escucha el evento 'storage' internamente).
+    {
+      const hash          = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+      const access_token  = hash.get('access_token');
+      const refresh_token = hash.get('refresh_token');
+
+      if (access_token) {
+        // Guardar sesión en localStorage (funciona en cualquier contexto).
+        // • Iframe (portal relay): localStorage particionado del iframe — correcto.
+        // • Popup / ventana principal: localStorage del primer partido — correcto.
+        function _guardarSesion() {
+          try {
+            const payload    = JSON.parse(atob(access_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+            const storageKey = 'sb-' + new URL(SUPABASE_URL).hostname.split('.')[0] + '-auth-token';
+            localStorage.setItem(storageKey, JSON.stringify({
+              access_token,
+              refresh_token: refresh_token || '',
+              token_type:    'bearer',
+              expires_in:    Math.max(0, (payload.exp || 0) - Math.floor(Date.now() / 1000)),
+              expires_at:    payload.exp || 0,
+              user: {
+                id: payload.sub || '', aud: 'authenticated', role: 'authenticated',
+                email: payload.email || '', app_metadata: payload.app_metadata || {},
+                user_metadata: payload.user_metadata || {}, created_at: '',
+              },
+            }));
+          } catch(_) {}
+        }
+
+        const esIframe = window !== window.top;
+        const esPopup  = !esIframe && !!window.opener;
+
+        if (esPopup) {
+          // Popup clásico: guardar y cerrar (el polling en la ventana principal detecta el cambio).
+          _guardarSesion();
+          document.body.innerHTML = '<div style="font-family:system-ui,sans-serif;padding:2.5rem;text-align:center;color:#475569;font-size:15px">Inicio de sesión completado.<br>Puedes cerrar esta ventana.</div>';
+          setTimeout(() => { try { window.close(); } catch(_) {} }, 1500);
+          return;
+        }
+
+        // Iframe (portal relay) o ventana principal (window.top fue navegado):
+        // guardar sesión, limpiar URL y arrancar la app normalmente.
+        _guardarSesion();
+        try { history.replaceState(null, '', '/'); } catch(_) {}
+        // Continúa al start() que está debajo de este bloque.
+      }
+    }
+
     start();
 
     // Logo en splash + lugares habituales
@@ -178,14 +234,25 @@ let supabaseClient = null;
 function _initSupabase() {
   if (supabaseClient) return true;
   if (!window.supabase || !window.supabase.createClient) return false;
-  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { flowType: 'implicit' },
+  });
   supabaseClient.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_OUT' && STATE.rol) {
       handleLogout();
     } else if (event === 'SIGNED_IN' && session && !STATE.rol) {
-      // Callback OAuth — sesión establecida después de redireccionamiento Google
       await _iniciarDesdeSession(session);
     }
+  });
+  // Fallback para contextos de iframe donde onAuthStateChange no detecta
+  // automáticamente los cambios de localStorage hechos por el popup OAuth.
+  window.addEventListener('storage', async function _storageOAuth(e) {
+    if (STATE.rol) { window.removeEventListener('storage', _storageOAuth); return; }
+    if (!e.key || !e.key.includes('-auth-token')) return;
+    try {
+      const { data: { session } } = await supabaseClient.auth.getSession();
+      if (session) { window.removeEventListener('storage', _storageOAuth); await _iniciarDesdeSession(session); }
+    } catch(_) {}
   });
   return true;
 }
@@ -566,13 +633,28 @@ async function solicitarPasswordDefault() {
   }
 }
 
-// ── LOGIN CON GOOGLE — usa Supabase Auth OAuth (redirección) ─────────────────
+// ── LOGIN CON GOOGLE — OAuth por ventana emergente (popup) ───────────────────
+// Se usa popup en vez de redirección de página completa para que el login
+// funcione cuando la app está embebida en un iframe (p. ej. el Portal Goyavier).
+// Google bloquea su pantalla de login dentro de iframes; el popup se abre como
+// ventana de nivel superior, que sí acepta. Al terminar, el popup envía los
+// tokens al opener vía postMessage y se cierra solo.
+const _GOOGLE_SVG = '<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/><path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>';
+
+let _oauthPopupTimer = null;
+
+function _resetGoogleBtn() {
+  const btn = document.getElementById("login-google-btn");
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = _GOOGLE_SVG + ' Ingresar con Google';
+  }
+}
+
 async function handleLoginGoogle() {
   const errEl = document.getElementById("login-error");
   const btn   = document.getElementById("login-google-btn");
   errEl.classList.remove("visible");
-
-  const _GOOGLE_SVG = '<svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/><path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/><path d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z" fill="#FBBC05"/><path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/></svg>';
 
   if (!_initSupabase()) {
     errEl.textContent = "Error al cargar el sistema de autenticación. Recarga la página.";
@@ -580,26 +662,85 @@ async function handleLoginGoogle() {
   }
 
   btn.disabled = true;
-  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></div> Redirigiendo...';
+  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;vertical-align:middle;margin-right:6px"></div> Abriendo Google...';
 
   try {
-    const { error } = await supabaseClient.auth.signInWithOAuth({
+    // skipBrowserRedirect: obtenemos la URL de Google sin redirigir esta ventana.
+    // Con flowType:'implicit' el popup recibirá #access_token=... y lo guardará
+    // en localStorage. El onAuthStateChange de esta ventana detecta el cambio
+    // automáticamente (supabase-js escucha el evento 'storage' entre pestañas).
+    // En iframe (portal): los navegadores modernos particionan el localStorage de terceros.
+    // Solución: navegar window.top al OAuth URL con redirectTo = PORTAL (no pazysalvo).
+    // Supabase regresa al portal con #access_token=..., el portal lo pasa al iframe
+    // via src URL, y el iframe guarda el token en su propio localStorage particionado.
+    const enIframe = window !== window.top;
+
+    const redirectTo = enIframe
+      ? 'https://portal-goyavier.netlify.app/'      // portal relay
+      : window.location.href.split('#')[0].split('?')[0];  // directo (popup)
+
+    const { data, error } = await supabaseClient.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: window.location.href.split('#')[0] },
+      options: {
+        redirectTo,
+        skipBrowserRedirect: true,
+      },
     });
-    if (error) {
-      errEl.textContent = error.message || 'Error al iniciar OAuth con Google.';
+    if (error || !data || !data.url) {
+      errEl.textContent = (error && error.message) || 'Error al iniciar OAuth con Google.';
       errEl.classList.add("visible");
-      btn.disabled = false;
-      btn.innerHTML = _GOOGLE_SVG + ' Ingresar con Google';
+      _resetGoogleBtn();
+      return;
     }
-    // Si no hay error, el navegador redirige a Google → Supabase → de vuelta aquí
-    // La sesión se restaura automáticamente en DOMContentLoaded vía getSession()
+
+    if (enIframe) {
+      // Navegar el tab completo al OAuth URL. Supabase redirigirá al portal con el token.
+      try { window.top.location.href = data.url; } catch(_) {
+        errEl.textContent = 'No se puede redirigir al inicio de sesión. Intenta abrir Paz y Salvo en una nueva pestaña.';
+        errEl.classList.add("visible");
+        _resetGoogleBtn();
+      }
+      return;
+    }
+
+    // Flujo normal (no iframe): abrir popup
+    const w = 500, h = 650;
+    const left = window.screenX + Math.max(0, (window.outerWidth  - w) / 2);
+    const top  = window.screenY + Math.max(0, (window.outerHeight - h) / 2);
+    const popup = window.open(
+      data.url, 'ps-google-login',
+      `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`
+    );
+
+    if (!popup) {
+      errEl.textContent = 'Permite las ventanas emergentes de este sitio para iniciar sesión con Google.';
+      errEl.classList.add("visible");
+      _resetGoogleBtn();
+      return;
+    }
+
+    let _pollCount = 0;
+    _oauthPopupTimer = setInterval(async () => {
+      _pollCount++;
+      try {
+        if (!STATE.rol) {
+          const { data: { session } } = await supabaseClient.auth.getSession();
+          if (session) {
+            clearInterval(_oauthPopupTimer); _oauthPopupTimer = null;
+            await _iniciarDesdeSession(session);
+            return;
+          }
+        }
+        const closed = popup.closed;
+        if (closed && !STATE.rol) { clearInterval(_oauthPopupTimer); _oauthPopupTimer = null; _resetGoogleBtn(); }
+      } catch(_) {
+        if (_pollCount > 180) { clearInterval(_oauthPopupTimer); _oauthPopupTimer = null; _resetGoogleBtn(); }
+      }
+    }, 1000);
   } catch(e) {
     errEl.textContent = "Error de conexión. Recarga la página.";
     errEl.classList.add("visible");
-    btn.disabled = false;
-    btn.innerHTML = _GOOGLE_SVG + ' Ingresar con Google';
+    _resetGoogleBtn();
   }
 }
 
@@ -775,8 +916,8 @@ async function loadMiEstado() {
     <div class="collab-status-card">
       <div style="display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:1rem">
         <div>
-          <div class="collab-name">${colaborador.nombre}</div>
-          <div class="collab-cedula">CC ${colaborador.cedula}</div>
+          <div class="collab-name">${esc(colaborador.nombre)}</div>
+          <div class="collab-cedula">CC ${esc(colaborador.cedula)}</div>
         </div>
         <span class="badge ${pazYSalvoCompleto ? "badge-completo" : "badge-pendiente"}">
           ${pazYSalvoCompleto ? "✓ Paz y Salvo Completo" : "En proceso"}
@@ -791,17 +932,17 @@ async function loadMiEstado() {
             <div class="area-item-left">
               <div class="area-dot ${area.estado.toLowerCase()}"></div>
               <div>
-                <div style="font-weight:500">${area.areaNombre}</div>
+                <div style="font-weight:500">${esc(area.areaNombre)}</div>
                 ${area.estado === "OMITIDO"
                   ? `<div style="font-size:0.75rem; color:#818cf8; margin-top:2px">Área propia — no requiere aprobación externa</div>`
                   : ""}
                 ${area.estado === "PENDIENTE" && area.adminUsername
-                  ? `<div style="font-size:0.75rem; color:var(--text2); margin-top:2px">⏳ Pendiente con: <strong>${area.adminUsername}</strong></div>`
+                  ? `<div style="font-size:0.75rem; color:var(--text2); margin-top:2px">⏳ Pendiente con: <strong>${esc(area.adminUsername)}</strong></div>`
                   : ""}
                 ${area.estado === "APROBADO" && area.aprobadoPor
-                  ? `<div style="font-size:0.75rem; color:var(--green); margin-top:2px">✓ Aprobado por: ${area.aprobadoPor}</div>`
+                  ? `<div style="font-size:0.75rem; color:var(--green); margin-top:2px">✓ Aprobado por: ${esc(area.aprobadoPor)}</div>`
                   : ""}
-                ${area.estado !== "OMITIDO" && area.observaciones ? `<div style="font-size:0.78rem; color:var(--red); margin-top:2px">⚠ ${area.observaciones}</div>` : ""}
+                ${area.estado !== "OMITIDO" && area.observaciones ? `<div style="font-size:0.78rem; color:var(--red); margin-top:2px">⚠ ${esc(area.observaciones)}</div>` : ""}
               </div>
             </div>
             <span class="badge badge-${area.estado.toLowerCase()}">${area.estado}</span>
@@ -811,7 +952,7 @@ async function loadMiEstado() {
     </div>
     ${!pazYSalvoCompleto && requierePazSalvo ? `
       <div style="margin-top:1.25rem; text-align:center">
-        <button class="btn btn-ghost" onclick="enviarRecordatorioPropio('${colaborador.cedula}')">
+        <button class="btn btn-ghost" onclick="enviarRecordatorioPropio('${esc(colaborador.cedula)}')">
           📧 Recordar a áreas pendientes
         </button>
       </div>
@@ -982,7 +1123,7 @@ async function loadAreaColaboradores() {
     tabsRow.style.display = "flex";
     tabsRow.innerHTML = r.areas.map(a => `
       <button class="filter-chip area-tab ${a.areaId === STATE.currentAreaId ? "active" : ""}"
-        onclick="switchAreaTab('${a.areaId}')">${a.areaNombre}</button>
+        onclick="switchAreaTab('${a.areaId}')">${esc(a.areaNombre)}</button>
     `).join("");
   } else {
     tabsRow.style.display = "none";
@@ -1061,10 +1202,10 @@ function renderAreaTable() {
           <tr class="${STATE.adminSelectedIds.has(c.id) ? "row-selected" : ""}">
             <td data-label=""><input type="checkbox" class="cb-custom" ${STATE.adminSelectedIds.has(c.id) ? "checked" : ""}
               onchange="toggleAdminSelect('${c.id}', this.checked)"></td>
-            <td data-label="Nombre">${c.nombre}</td>
-            <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${c.cedula}</span></td>
+            <td data-label="Nombre">${esc(c.nombre)}</td>
+            <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${esc(c.cedula)}</span></td>
             <td data-label="Estado"><span class="badge badge-${c.estado.toLowerCase()}">${c.estado}</span></td>
-            <td data-label="Aprobado" style="color:var(--text2); font-size:0.82rem">${c.aprobadoPor || "—"}</td>
+            <td data-label="Aprobado" style="color:var(--text2); font-size:0.82rem">${esc(c.aprobadoPor || "—")}</td>
             <td data-label="Acción"><button class="btn btn-ghost btn-sm" onclick="abrirGestionar('${c.id}')">Gestionar</button></td>
           </tr>
         `).join("")}
@@ -1134,10 +1275,10 @@ async function abrirGestionar(colabId) {
 
   const content = document.getElementById("modal-gestionar-content");
   content.innerHTML = `
-    <div class="modal-info-row"><span class="modal-info-label">Nombre</span><span class="modal-info-value">${c.nombre}</span></div>
-    <div class="modal-info-row"><span class="modal-info-label">Cédula</span><span class="modal-info-value" style="font-family:var(--font-mono)">${c.cedula}</span></div>
+    <div class="modal-info-row"><span class="modal-info-label">Nombre</span><span class="modal-info-value">${esc(c.nombre)}</span></div>
+    <div class="modal-info-row"><span class="modal-info-label">Cédula</span><span class="modal-info-value" style="font-family:var(--font-mono)">${esc(c.cedula)}</span></div>
     <div class="modal-info-row"><span class="modal-info-label">Estado en tu área</span><span><span class="badge badge-${c.estado.toLowerCase()}">${c.estado}</span></span></div>
-    ${c.observaciones ? `<div class="modal-info-row"><span class="modal-info-label">Observaciones</span><span style="color:var(--red); font-size:0.85rem">${c.observaciones}</span></div>` : ""}
+    ${c.observaciones ? `<div class="modal-info-row"><span class="modal-info-label">Observaciones</span><span style="color:var(--red); font-size:0.85rem">${esc(c.observaciones)}</span></div>` : ""}
     ${STATE.rol === "SUPERADMIN" ? `
     <div id="gestionar-areas-estado" style="margin-top:1rem">
       <div style="font-size:0.78rem; color:var(--text3); padding:0.5rem 0">Cargando estado general...</div>
@@ -1163,14 +1304,14 @@ async function abrirGestionar(colabId) {
     <div style="display:flex; flex-direction:column; gap:4px; max-height:180px; overflow-y:auto">
       ${r.estadoPorArea.map(a => `
         <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 8px; background:var(--surface2); border-radius:6px">
-          <span style="font-size:0.78rem">${a.areaNombre}</span>
+          <span style="font-size:0.78rem">${esc(a.areaNombre)}</span>
           <span class="badge badge-${a.estado.toLowerCase()}" style="font-size:0.65rem">${a.estado}</span>
         </div>
       `).join("")}
     </div>
     ${pendientes.length > 0 ? `
       <button class="btn btn-ghost btn-sm" style="margin-top:0.75rem; width:100%"
-        onclick="enviarRecordatorio('${colabId}', '${c.nombre.replace(/'/g,"\\'")}')">
+        onclick="enviarRecordatorio('${colabId}', '${esc(c.nombre)}')">
         📧 Enviar recordatorio a áreas pendientes (${pendientes.length})
       </button>
     ` : `<div style="margin-top:0.75rem; font-size:0.78rem; color:var(--green)">✓ Todas las áreas aprobadas</div>`}
@@ -1267,16 +1408,16 @@ function renderSAColaboradoresTable() {
       </tr></thead>
       <tbody>
         ${lista.map(c => {
-          const escapedNombre    = c.nombre.replace(/'/g,"\\'");
-          const escapedAreasReq  = (c.areasRequeridas || "").replace(/'/g,"\\'");
+          const escapedNombre    = esc(c.nombre);
+          const escapedAreasReq  = esc(c.areasRequeridas || "");
           const tipoLabel = { DOCENTE: "Académica", ADMINISTRATIVO: "Administrativa", SERVICIOS: "Operativa" }[c.tipoColaborador] || "—";
           const tipoColor = { DOCENTE: "var(--blue)", ADMINISTRATIVO: "var(--green)", SERVICIOS: "var(--yellow)" }[c.tipoColaborador] || "var(--text2)";
           return `
           <tr class="${STATE.saSelectedIds.has(c.id) ? "row-selected" : ""}">
             <td data-label=""><input type="checkbox" class="cb-custom" ${STATE.saSelectedIds.has(c.id) ? "checked" : ""}
               onchange="toggleSASelect('${c.id}', this.checked)"></td>
-            <td data-label="Nombre">${c.nombre}</td>
-            <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${c.cedula}</span></td>
+            <td data-label="Nombre">${esc(c.nombre)}</td>
+            <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${esc(c.cedula)}</span></td>
             <td data-label="Tipo" style="font-size:0.8rem; color:${tipoColor}">${tipoLabel}</td>
             <td data-label="Estado"><span class="badge badge-${c.estadoGeneral === "COMPLETO" ? "aprobado" : "pendiente"}">${c.estadoGeneral}</span></td>
             <td data-label="P&S">
@@ -1291,7 +1432,7 @@ function renderSAColaboradoresTable() {
             <td data-label="Activo"><span class="badge ${c.activo ? "badge-aprobado" : "badge-inactivo"}">${c.activo ? "Activo" : "Inactivo"}</span></td>
             <td data-label="Acciones">
               <div style="display:flex; gap:6px; flex-wrap:wrap">
-                <button class="btn btn-ghost btn-sm" onclick="abrirModalEditarColaborador('${c.id}','${escapedNombre}','${c.cedula}',${c.activo},'${c.tipoColaborador || ""}','${c.nivelEducativo || ""}','${escapedAreasReq}')">Editar</button>
+                <button class="btn btn-ghost btn-sm" onclick="abrirModalEditarColaborador('${c.id}','${escapedNombre}','${esc(c.cedula)}',${c.activo},'${c.tipoColaborador || ""}','${c.nivelEducativo || ""}','${escapedAreasReq}')">Editar</button>
               </div>
             </td>
           </tr>`;
@@ -1361,7 +1502,7 @@ function populateColabAreasSelect(selectedId = "", tipo = "") {
 
   sel.innerHTML = `<option value="">${emptyLabel}</option>` +
     opciones.map(a =>
-      `<option value="${a.id}" ${String(a.id) === selected ? "selected" : ""}>${a.nombre}</option>`
+      `<option value="${a.id}" ${String(a.id) === selected ? "selected" : ""}>${esc(a.nombre)}</option>`
   ).join("");
 }
 
@@ -1692,9 +1833,9 @@ function procesarFilas(filas) {
         </div>
         ${registros.slice(0, 10).map(r => `
           <div class="upload-preview-row">
-            <span style="flex:2">${r.nombre}</span>
-            <span style="flex:1; font-family:var(--font-mono); font-size:0.82rem">${r.cedula}</span>
-            <span style="flex:1; color:var(--text2); font-size:0.82rem">${r.username || '<i style="color:var(--text3)">=cédula</i>'}</span>
+            <span style="flex:2">${esc(r.nombre)}</span>
+            <span style="flex:1; font-family:var(--font-mono); font-size:0.82rem">${esc(r.cedula)}</span>
+            <span style="flex:1; color:var(--text2); font-size:0.82rem">${r.username ? esc(r.username) : '<i style="color:var(--text3)">=cédula</i>'}</span>
             <span style="flex:1"><span class="badge ${r.requierePazSalvo ? "badge-aprobado" : "badge-inactivo"}">${r.requierePazSalvo ? "Sí" : "No"}</span></span>
           </div>
         `).join("")}
@@ -1762,25 +1903,25 @@ async function loadSAUsuarios() {
       </tr></thead>
       <tbody>
         ${r.usuarios.map(u => {
-          const areasLabel = (u.areaNombres && u.areaNombres.length) ? u.areaNombres.join(", ") : (u.areaNombre || "—");
-          const escapedArea  = (u.areaId || "").replace(/'/g, "\\'");
-          const escapedEmail = (u.email || "").replace(/'/g, "\\'");
-          const escapedCed   = (u.cedula || "").replace(/'/g, "\\'");
+          const areasLabel = (u.areaNombres && u.areaNombres.length) ? u.areaNombres.map(esc).join(", ") : esc(u.areaNombre || "—");
+          const escapedArea  = esc(u.areaId || "");
+          const escapedEmail = esc(u.email || "");
+          const escapedCed   = esc(u.cedula || "");
           return `<tr>
-            <td data-label="Usuario" style="font-weight:500">${u.username}</td>
+            <td data-label="Usuario" style="font-weight:500">${esc(u.username)}</td>
             <td data-label="Rol"><span class="badge ${u.rol==="SUPERADMIN" ? "" : u.rol==="ADMIN" ? "badge-aprobado" : "badge-pendiente"}"
               style="${u.rol==="SUPERADMIN" ? "background:rgba(139,92,246,0.15);color:#c4b5fd" : ""}">
               ${u.rol}
             </span></td>
             <td data-label="Área" style="font-size:0.85rem">${areasLabel}</td>
-            <td data-label="Correo" style="font-size:0.8rem; color:var(--text2)">${u.email || "—"}</td>
-            <td data-label="Cédula" style="font-size:0.8rem; color:var(--text2)">${u.cedula || "—"}</td>
+            <td data-label="Correo" style="font-size:0.8rem; color:var(--text2)">${esc(u.email || "—")}</td>
+            <td data-label="Cédula" style="font-size:0.8rem; color:var(--text2)">${esc(u.cedula || "—")}</td>
             <td data-label="Estado"><span class="badge ${u.activo ? "badge-aprobado" : "badge-inactivo"}">${u.activo ? "Activo" : "Inactivo"}</span></td>
             <td data-label="Acciones">
               <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
                 ${u.rol !== "SUPERADMIN"
                   ? `<button class="btn btn-ghost btn-sm" onclick="abrirModalEditarUsuario('${u.id}','${escapedArea}',${u.activo},'${escapedEmail}','${escapedCed}')">Editar</button>
-                     <button class="btn btn-ghost btn-sm" style="color:var(--yellow)" onclick="resetearPasswordUsuario('${u.id}','${u.username}')">🔑 Resetear</button>`
+                     <button class="btn btn-ghost btn-sm" style="color:var(--yellow)" onclick="resetearPasswordUsuario('${u.id}','${esc(u.username)}')">🔑 Resetear</button>`
                   : '<span style="color:var(--text3); font-size:0.8rem">—</span>'}
               </div>
             </td>
@@ -1838,7 +1979,7 @@ function populateAreaSelect(selectedIds = "") {
     ? selectedIds.split(",").map(s => s.trim()).filter(Boolean)
     : (Array.isArray(selectedIds) ? selectedIds.map(String) : []);
   sel.innerHTML = STATE.areasDisponibles.map(a =>
-    `<option value="${a.id}" ${selected.includes(String(a.id)) ? "selected" : ""}>${a.nombre}</option>`
+    `<option value="${a.id}" ${selected.includes(String(a.id)) ? "selected" : ""}>${esc(a.nombre)}</option>`
   ).join("");
 }
 
@@ -2212,14 +2353,14 @@ async function loadCorreosSA() {
       </tr></thead>
       <tbody>
         ${admins.map(u => {
-          const areasLabel = (u.areaNombres && u.areaNombres.length) ? u.areaNombres.join(", ") : (u.areaNombre || "—");
+          const areasLabel = (u.areaNombres && u.areaNombres.length) ? u.areaNombres.map(esc).join(", ") : esc(u.areaNombre || "—");
           return `<tr>
-            <td style="font-weight:500">${u.username}</td>
+            <td style="font-weight:500">${esc(u.username)}</td>
             <td style="font-size:0.85rem">${areasLabel}</td>
             <td><span class="badge ${u.activo ? "badge-aprobado" : "badge-inactivo"}">${u.activo ? "Activo" : "Inactivo"}</span></td>
             <td>
               <input type="email" id="admin-email-${u.id}" class="form-input"
-                value="${u.email || ""}" placeholder="correo@colegio.edu.co"
+                value="${esc(u.email || "")}" placeholder="correo@colegio.edu.co"
                 style="padding:6px 10px; font-size:0.82rem">
             </td>
             <td>
@@ -2280,9 +2421,9 @@ async function ejecutarDiagnostico() {
 
   const adminsRows = (s.adminsCheck || []).map(a => `
     <tr>
-      <td>${a.username}</td>
+      <td>${esc(a.username)}</td>
       <td><span class="badge ${a.existeEnAreas ? "badge-aprobado" : "badge-rechazado"}">${a.existeEnAreas ? "✓ OK" : "❌ INVÁLIDO"}</span></td>
-      <td style="font-size:0.78rem; color:var(--text2)">${a.areaNombre}</td>
+      <td style="font-size:0.78rem; color:var(--text2)">${esc(a.areaNombre)}</td>
     </tr>`).join("");
 
   el.innerHTML = `
@@ -2318,9 +2459,9 @@ async function ejecutarRepararIds() {
   if (!r.ok) { el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`; return; }
 
   const reparadosHtml = (r.reparados || []).map(x =>
-    `<li>${x.username} → ${x.areaNombre}</li>`).join("");
+    `<li>${esc(x.username)} → ${esc(x.areaNombre)}</li>`).join("");
   const sinResolverHtml = (r.sinResolver || []).map(x =>
-    `<li>${x.username} (actualiza AREA_ID manualmente)</li>`).join("");
+    `<li>${esc(x.username)} (actualiza AREA_ID manualmente)</li>`).join("");
 
   el.innerHTML = `
     <div class="alert-banner" style="margin-bottom:0.75rem">
@@ -2348,17 +2489,17 @@ async function ejecutarDiagnosticoAdmins() {
       : "";
     return `
       <tr style="${a.ok ? "" : "background:rgba(239,68,68,0.06)"}">
-        <td><strong>${a.username}</strong>${issues}</td>
-        <td style="font-size:0.78rem; color:var(--text2)">${a.areaNombres || "<span style='color:var(--red)'>—</span>"}</td>
-        <td style="font-size:0.78rem; color:var(--text2)">${a.cedula || "<span style='color:var(--red)'>—</span>"}</td>
-        <td style="font-size:0.78rem; color:var(--text2)">${a.colabNombre || "<span style='color:var(--yellow)'>No encontrado</span>"}</td>
+        <td><strong>${esc(a.username)}</strong>${issues}</td>
+        <td style="font-size:0.78rem; color:var(--text2)">${a.areaNombres ? esc(a.areaNombres) : "<span style='color:var(--red)'>—</span>"}</td>
+        <td style="font-size:0.78rem; color:var(--text2)">${a.cedula ? esc(a.cedula) : "<span style='color:var(--red)'>—</span>"}</td>
+        <td style="font-size:0.78rem; color:var(--text2)">${a.colabNombre ? esc(a.colabNombre) : "<span style='color:var(--yellow)'>No encontrado</span>"}</td>
         <td><span class="badge ${a.ok ? "badge-aprobado" : "badge-rechazado"}">${a.ok ? "✓ OK" : "⚠ Problema"}</span></td>
       </tr>`;
   }).join("");
 
   const sinAdminHtml = r.areasSinAdmin && r.areasSinAdmin.length
     ? `<div style="margin-top:0.75rem; font-size:0.82rem; color:var(--yellow)">
-        Áreas sin administrador asignado: <strong>${r.areasSinAdmin.map(a => a.nombre).join(", ")}</strong>
+        Áreas sin administrador asignado: <strong>${r.areasSinAdmin.map(a => esc(a.nombre)).join(", ")}</strong>
        </div>`
     : "";
 
@@ -2397,11 +2538,11 @@ async function ejecutarReparacionAdmins() {
   if (!r.ok) { el.innerHTML = `<div class="alert-banner error"><span>❌</span><div>${r.error}</div></div>`; return; }
 
   const reparadosHtml = (r.reparados || []).map(x =>
-    `<li><strong>${x.username}</strong> → ${x.areaNombre}${x.areaCreada ? " <span style='color:var(--green)'>(área creada)</span>" : " <span style='color:var(--text2)'>(ID corregido)</span>"}</li>`
+    `<li><strong>${esc(x.username)}</strong> → ${esc(x.areaNombre)}${x.areaCreada ? " <span style='color:var(--green)'>(área creada)</span>" : " <span style='color:var(--text2)'>(ID corregido)</span>"}</li>`
   ).join("");
 
   const manualesHtml = (r.manuales || []).map(x =>
-    `<li><strong>${x.username}</strong>: ${x.problema}</li>`
+    `<li><strong>${esc(x.username)}</strong>: ${esc(x.problema)}</li>`
   ).join("");
 
   el.innerHTML = `
@@ -2533,13 +2674,13 @@ function renderVGTable() {
           </th>
           <th class="col-nombre">Nombre</th>
           ${areasVis.map(a =>
-            `<th class="col-area" title="${a.nombre}">${a.nombre.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,4)}</th>`
+            `<th class="col-area" title="${esc(a.nombre)}">${esc(a.nombre.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,4))}</th>`
           ).join("")}
           <th style="width:80px"></th>
         </tr></thead>
         <tbody>
           ${lista.map(c => {
-            const esc  = c.nombre.replace(/'/g,"\\'");
+            const escNombre = esc(c.nombre);
             const done = c.estadoGeneral === "COMPLETO";
             const sel  = STATE._vgSelected.has(c.id);
             return `
@@ -2549,8 +2690,8 @@ function renderVGTable() {
                   onchange="toggleVGSelect('${c.id}', this.checked)">` : ""}
               </td>
               <td class="col-nombre">
-                <div class="global-nombre">${c.nombre}</div>
-                <div class="global-cedula">${c.cedula}</div>
+                <div class="global-nombre">${escNombre}</div>
+                <div class="global-cedula">${esc(c.cedula)}</div>
                 <div class="global-acciones">
                   ${done
                     ? `<span class="badge badge-aprobado" style="font-size:0.65rem">✓ Completo</span>`
@@ -2560,20 +2701,20 @@ function renderVGTable() {
               ${areasVis.map(a => {
                 const ap = c.estadoPorArea.find(x => String(x.areaId) === String(a.id));
                 if (!ap || ap.estado === "NO_APLICA") return `<td class="col-area"></td>`;
-                const tt = ap.areaNombre + (ap.aprobadoPor ? " · "+ap.aprobadoPor : "") + (ap.observaciones ? " · "+ap.observaciones : "");
+                const tt = esc(ap.areaNombre) + (ap.aprobadoPor ? " · "+esc(ap.aprobadoPor) : "") + (ap.observaciones ? " · "+esc(ap.observaciones) : "");
                 return `<td class="col-area" title="${tt}"><span class="dot-estado dot-${ap.estado.toLowerCase()}"></span></td>`;
               }).join("")}
               <td style="text-align:center;white-space:nowrap">
                 ${done
                   ? `<button class="btn-icon-action" title="Descargar paz y salvo"
-                       onclick="descargaIndividualVG('${c.id}','${esc}')">📥</button>`
+                       onclick="descargaIndividualVG('${c.id}','${escNombre}')">📥</button>`
                   : `<button class="btn-icon-action" title="Enviar recordatorio"
-                       onclick="enviarRecordatorio('${c.id}','${esc}')">📧</button>
+                       onclick="enviarRecordatorio('${c.id}','${escNombre}')">📧</button>
                      <button class="btn-icon-action btn-icon-warn" title="Forzar paz y salvo"
-                       onclick="forzarPazSalvo('${c.id}','${esc}')">⚡</button>`
+                       onclick="forzarPazSalvo('${c.id}','${escNombre}')">⚡</button>`
                 }
                 <button class="btn-icon-action btn-icon-danger" title="Resetear aprobaciones"
-                  onclick="resetearAprobaciones('${c.id}','${esc}')">🗑️</button>
+                  onclick="resetearAprobaciones('${c.id}','${escNombre}')">🗑️</button>
               </td>
             </tr>`;
           }).join("")}
@@ -2734,12 +2875,12 @@ async function abrirModalRecordatorio({ colaboradorId, cedula, esCedula, nombre 
              ${p.tieneCorreo ? "checked" : "disabled"}
              style="margin-top:2px;flex-shrink:0">
       <span style="flex:1;min-width:0">
-        <span style="font-size:0.85rem;font-weight:600;color:var(--text1);display:block">${p.areaNombre}</span>
+        <span style="font-size:0.85rem;font-weight:600;color:var(--text1);display:block">${esc(p.areaNombre)}</span>
         ${p.adminNombre
-          ? `<span style="font-size:0.77rem;color:var(--text2)">${p.adminNombre}</span>`
+          ? `<span style="font-size:0.77rem;color:var(--text2)">${esc(p.adminNombre)}</span>`
           : `<span style="font-size:0.77rem;color:var(--red)">Sin administrador asignado</span>`}
         ${p.adminEmail
-          ? `<span style="font-size:0.72rem;color:var(--text3);display:block">${p.adminEmail}</span>`
+          ? `<span style="font-size:0.72rem;color:var(--text3);display:block">${esc(p.adminEmail)}</span>`
           : `<span style="font-size:0.72rem;color:var(--red);display:block">⚠ Sin correo registrado — no se enviará</span>`}
       </span>
     </label>
@@ -2868,8 +3009,8 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
   const areasHtml = doc.areas && doc.areas.length
     ? `<div class="areas"><div class="areas-title">DEPENDENCIAS CERTIFICADAS</div><table class="areas-tbl">${
         doc.areas.map(a =>
-          `<tr><td class="atd-chk">&#10003;</td><td class="atd-nom">${a.nombre}</td>` +
-          `<td class="atd-sep">&mdash;</td><td class="atd-resp">${a.responsableNombre || a.responsable || ''}</td></tr>`
+          `<tr><td class="atd-chk">&#10003;</td><td class="atd-nom">${esc(a.nombre)}</td>` +
+          `<td class="atd-sep">&mdash;</td><td class="atd-resp">${esc(a.responsableNombre || a.responsable || '')}</td></tr>`
         ).join('')
       }</table></div>`
     : '';
@@ -2944,8 +3085,8 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
       `<div class="body"><div>` +
         `<p class="intro">La Dirección de la Institución Educativa certifica que el colaborador:</p>` +
         `<div class="person">` +
-          `<div class="p-name">${doc.nombre}</div>` +
-          `<div class="p-cc">C&eacute;dula de Ciudadan&iacute;a No. ${doc.cedula}</div>` +
+          `<div class="p-name">${esc(doc.nombre)}</div>` +
+          `<div class="p-cc">C&eacute;dula de Ciudadan&iacute;a No. ${esc(doc.cedula)}</div>` +
         `</div>` +
         `<p class="cert-txt">Se encuentra a <strong>PAZ Y SALVO</strong> con todas las dependencias de la ` +
         `Institución Educativa ${institucion}, habiendo cumplido satisfactoriamente con todos ` +
@@ -2956,7 +3097,7 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
         `<div class="sigs" style="justify-content:center"><div class="sig">` +
           (doc.responsableTH
             ? `<div class="sig-space" style="display:flex;align-items:flex-end;justify-content:center">` +
-                `<span style="font-family:Georgia,serif;font-size:15px;font-style:italic;color:#2d5a2d">${doc.responsableTH}</span>` +
+                `<span style="font-family:Georgia,serif;font-size:15px;font-style:italic;color:#2d5a2d">${esc(doc.responsableTH)}</span>` +
               `</div>`
             : `<div class="sig-space"></div>`) +
           `<div class="sig-line"></div><div class="sig-lbl">Talento Humano</div>` +
@@ -3181,11 +3322,11 @@ async function verificarCodigo() {
     resultEl.className = "verify-result valid";
     resultEl.innerHTML = `
       <div class="verify-result-title">✓ Código válido — Paz y Salvo auténtico</div>
-      <div class="verify-row"><span>Nombre:</span> ${r.datos.nombre}</div>
-      <div class="verify-row"><span>Cédula:</span> ${r.datos.cedula}</div>
-      <div class="verify-row"><span>Estado:</span> ${r.datos.estado}</div>
-      <div class="verify-row"><span>Emisión:</span> ${fecha}</div>
-      <div class="verify-row"><span>Código:</span> <span style="font-family:var(--font-mono)">${r.datos.codigo}</span></div>
+      <div class="verify-row"><span>Nombre:</span> ${esc(r.datos.nombre)}</div>
+      <div class="verify-row"><span>Cédula:</span> ${esc(r.datos.cedula)}</div>
+      <div class="verify-row"><span>Estado:</span> ${esc(r.datos.estado)}</div>
+      <div class="verify-row"><span>Emisión:</span> ${esc(fecha)}</div>
+      <div class="verify-row"><span>Código:</span> <span style="font-family:var(--font-mono)">${esc(r.datos.codigo)}</span></div>
     `;
   } else if (r.ok && !r.valido && r.motivo === "REEMPLAZADO") {
     resultEl.className = "verify-result invalid";

@@ -17,16 +17,27 @@ const supabaseAnon: SupabaseClient = createClient(
   { auth: { persistSession: false } }
 )
 
-const CORS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+const ALLOWED_ORIGINS = new Set([
+  'https://pazysalvo.netlify.app',
+  'https://portal-goyavier.netlify.app',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500',
+])
+
+function getCorsHeaders(origin: string) {
+  const allowed = ALLOWED_ORIGINS.has(origin) ? origin : 'https://pazysalvo.netlify.app'
+  return {
+    'Access-Control-Allow-Origin':  allowed,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Vary': 'Origin',
+  }
 }
 
-function jsonResp(data: unknown, status = 200) {
+function jsonResp(data: unknown, status = 200, origin = '') {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { ...CORS, 'Content-Type': 'application/json' },
+    headers: { ...getCorsHeaders(origin), 'Content-Type': 'application/json' },
   })
 }
 
@@ -51,6 +62,10 @@ function normCedula(v: string): string {
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+}
+
+function escHtml(s: unknown): string {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')
 }
 
 // ─── LOG ──────────────────────────────────────────────────────────────────────
@@ -115,7 +130,7 @@ async function emailCredenciales(to: string, username: string, password: string)
        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:15px">
          <tr>
            <td style="padding:10px 14px;background:#f1f5f9;font-weight:bold;border:1px solid #e2e8f0;width:45%">Usuario</td>
-           <td style="padding:10px 14px;border:1px solid #e2e8f0;font-family:monospace">${username}</td>
+           <td style="padding:10px 14px;border:1px solid #e2e8f0;font-family:monospace">${escHtml(username)}</td>
          </tr>
          <tr>
            <td style="padding:10px 14px;background:#f1f5f9;font-weight:bold;border:1px solid #e2e8f0">Contraseña temporal</td>
@@ -1162,8 +1177,8 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
       adminEmail,
       `Recordatorio de Paz y Salvo — ${colaboradorNombre}`,
       `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto">
-         <p>Estimado/a <strong>${p.adminNombre || 'Jefe de Área'}</strong>:</p>
-         <p>Le recordamos que <strong>${colaboradorNombre}</strong> tiene pendiente su paz y salvo en el área <strong>${p.areaNombre}</strong>.</p>
+         <p>Estimado/a <strong>${escHtml(p.adminNombre || 'Jefe de Área')}</strong>:</p>
+         <p>Le recordamos que <strong>${escHtml(colaboradorNombre)}</strong> tiene pendiente su paz y salvo en el área <strong>${escHtml(p.areaNombre)}</strong>.</p>
          <p>Por favor ingrese al sistema y gestione la solicitud a la brevedad.</p>
          <p style="text-align:center;margin:24px 0">
            <a href="https://pazysalvo.netlify.app"
@@ -1205,7 +1220,7 @@ async function accionEnviarSolicitudTH(body: Body, ses: SessionData) {
   }
 
   const areas = (doc?.areas ?? []) as Body[]
-  const areasList = areas.map(a => `<li><strong>${a.nombre}</strong> — ${a.responsableNombre || a.responsable}</li>`).join('')
+  const areasList = areas.map(a => `<li><strong>${escHtml(a.nombre)}</strong> — ${escHtml(a.responsableNombre || a.responsable)}</li>`).join('')
   const fechaStr  = new Date(String(doc?.fechaEmision)).toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric' })
 
   const pdfBase64 = typeof body.pdfBase64 === 'string' && body.pdfBase64 ? body.pdfBase64 : null
@@ -1219,15 +1234,15 @@ async function accionEnviarSolicitudTH(body: Body, ses: SessionData) {
     `Paz y Salvo Completo — ${doc?.nombre} (${doc?.cedula})`,
     `<h2 style="color:#1a1a2e">Paz y Salvo Completo</h2>
      <table style="border-collapse:collapse;margin-bottom:16px">
-       <tr><td style="padding:4px 12px 4px 0;color:#666">Colaborador</td><td><strong>${doc?.nombre}</strong></td></tr>
-       <tr><td style="padding:4px 12px 4px 0;color:#666">Cédula</td><td>${doc?.cedula}</td></tr>
-       <tr><td style="padding:4px 12px 4px 0;color:#666">Fecha de emisión</td><td>${fechaStr}</td></tr>
-       <tr><td style="padding:4px 12px 4px 0;color:#666">Código de verificación</td><td><code>${doc?.codigoVerificacion}</code></td></tr>
+       <tr><td style="padding:4px 12px 4px 0;color:#666">Colaborador</td><td><strong>${escHtml(doc?.nombre)}</strong></td></tr>
+       <tr><td style="padding:4px 12px 4px 0;color:#666">Cédula</td><td>${escHtml(doc?.cedula)}</td></tr>
+       <tr><td style="padding:4px 12px 4px 0;color:#666">Fecha de emisión</td><td>${escHtml(fechaStr)}</td></tr>
+       <tr><td style="padding:4px 12px 4px 0;color:#666">Código de verificación</td><td><code>${escHtml(doc?.codigoVerificacion)}</code></td></tr>
      </table>
      <p><strong>Áreas aprobadas:</strong></p>
      <ul style="line-height:1.8">${areasList}</ul>
      <hr style="margin:16px 0;border:none;border-top:1px solid #eee">
-     <p style="color:#888;font-size:12px">Sistema de Paz y Salvo — ${doc?.institucion}</p>`,
+     <p style="color:#888;font-size:12px">Sistema de Paz y Salvo — ${escHtml(doc?.institucion)}</p>`,
     attachments
   )
 
@@ -1268,12 +1283,16 @@ const SA             = (s: SessionData) => s.rol === 'SUPERADMIN'
 const ADMIN          = (s: SessionData) => ADMIN_ROLES.has(s.rol)
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response(null, { headers: CORS })
-  if (req.method !== 'POST')    return jsonResp({ ok: false, error: 'Método no permitido' }, 405)
+  const origin = req.headers.get('Origin') ?? ''
+  // Wrapper local para no pasar origin en cada llamada dentro de este handler
+  const resp = (data: unknown, status = 200) => jsonResp(data, status, origin)
+
+  if (req.method === 'OPTIONS') return new Response(null, { headers: getCorsHeaders(origin) })
+  if (req.method !== 'POST')    return resp({ ok: false, error: 'Método no permitido' }, 405)
 
   let body: Body
   try { body = await req.json() }
-  catch { return jsonResp({ ok: false, error: 'JSON inválido' }, 400) }
+  catch { return resp({ ok: false, error: 'JSON inválido' }, 400) }
 
   const action = String(body.action || '')
 
@@ -1284,6 +1303,12 @@ Deno.serve(async (req) => {
     const jwt = authHeader.replace(/^Bearer\s+/i, '').trim()
     if (!jwt) return jsonResp({ ok: false, error: 'No autenticado' }, 401)
 
+    // Verificar el JWT contra Supabase Auth (valida firma, expiración y revocación).
+    // getUser() usa la clave secreta del servidor — no se puede falsificar desde el cliente.
+    const { data: { user: authUser }, error: authErr } = await supabase.auth.getUser(jwt)
+    if (authErr || !authUser) return jsonResp({ ok: false, error: 'Token inválido' }, 401)
+
+    // El token es auténtico — ahora extraer custom claims del payload.
     let claims: Record<string, unknown>
     try {
       const payload = jwt.split('.')[1]
@@ -1291,9 +1316,6 @@ Deno.serve(async (req) => {
     } catch {
       return jsonResp({ ok: false, error: 'Token inválido' }, 401)
     }
-
-    if (claims.exp && Number(claims.exp) < Date.now() / 1000)
-      return jsonResp({ ok: false, error: 'Token expirado' }, 401)
 
     const rol = String(claims.rol ?? '')
     if (!rol) return jsonResp({ ok: false, error: 'Token sin permisos de rol. Contacta al administrador.' }, 403)
