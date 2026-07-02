@@ -18,14 +18,14 @@ const supabaseAnon: SupabaseClient = createClient(
 )
 
 const ALLOWED_ORIGINS = new Set([
-  'https://pazysalvo.netlify.app',
-  'https://portal-goyavier.netlify.app',
+  'https://pazysalvogoyavier.netlify.app',
+  'https://portalgoyavier.netlify.app',
   'http://localhost:5500',
   'http://127.0.0.1:5500',
 ])
 
 function getCorsHeaders(origin: string) {
-  const allowed = ALLOWED_ORIGINS.has(origin) ? origin : 'https://pazysalvo.netlify.app'
+  const allowed = ALLOWED_ORIGINS.has(origin) ? origin : 'https://pazysalvogoyavier.netlify.app'
   return {
     'Access-Control-Allow-Origin':  allowed,
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -141,7 +141,7 @@ async function emailCredenciales(to: string, username: string, password: string)
          <strong>Al ingresar por primera vez deberás cambiar esta contraseña temporal.</strong>
        </p>
        <p style="text-align:center;margin:24px 0">
-         <a href="https://pazysalvo.netlify.app"
+         <a href="https://pazysalvogoyavier.netlify.app"
             style="background:#1e3a5f;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;font-size:15px;display:inline-block">
            Iniciar sesión
          </a>
@@ -1181,7 +1181,7 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
          <p>Le recordamos que <strong>${escHtml(colaboradorNombre)}</strong> tiene pendiente su paz y salvo en el área <strong>${escHtml(p.areaNombre)}</strong>.</p>
          <p>Por favor ingrese al sistema y gestione la solicitud a la brevedad.</p>
          <p style="text-align:center;margin:24px 0">
-           <a href="https://pazysalvo.netlify.app"
+           <a href="https://pazysalvogoyavier.netlify.app"
               style="background:#1e3a5f;color:#fff;text-decoration:none;padding:12px 28px;border-radius:6px;font-weight:bold;font-size:15px;display:inline-block">
              Ir al Sistema de Paz y Salvo
            </a>

@@ -676,7 +676,7 @@ async function handleLoginGoogle() {
     const enIframe = window !== window.top;
 
     const redirectTo = enIframe
-      ? 'https://portal-goyavier.netlify.app/'      // portal relay
+      ? 'https://portalgoyavier.netlify.app/'      // portal relay
       : window.location.href.split('#')[0].split('?')[0];  // directo (popup)
 
     const { data, error } = await supabaseClient.auth.signInWithOAuth({
