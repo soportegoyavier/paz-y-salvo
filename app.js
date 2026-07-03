@@ -259,8 +259,13 @@ function _initSupabase() {
 
 async function _iniciarDesdeSession(session) {
   if (!_poblarStateDesdeSession(session)) {
-    await supabaseClient.auth.signOut();
+    if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
     _limpiarSesionLocal();
+    supabaseClient.auth.signOut().catch(() => {});
+    const errEl = document.getElementById("login-error");
+    if (errEl) { errEl.textContent = "Esta cuenta de Google no tiene acceso al sistema. Contacta al administrador."; errEl.classList.add("visible"); }
+    _setSplashMsg("Listo");
+    _hideSplash();
     return false;
   }
   try {
@@ -676,7 +681,7 @@ async function handleLoginGoogle() {
     const enIframe = window !== window.top;
 
     const redirectTo = enIframe
-      ? 'https://portalgoyavier.netlify.app/'      // portal relay
+      ? 'https://zaiko-portal.colegiogoyavier.edu.co/'      // portal relay
       : window.location.href.split('#')[0].split('?')[0];  // directo (popup)
 
     const { data, error } = await supabaseClient.auth.signInWithOAuth({
@@ -684,6 +689,7 @@ async function handleLoginGoogle() {
       options: {
         redirectTo,
         skipBrowserRedirect: true,
+        queryParams: { prompt: 'select_account' },
       },
     });
     if (error || !data || !data.url) {

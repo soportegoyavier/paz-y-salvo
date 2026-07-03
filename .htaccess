@@ -1,0 +1,24 @@
+Options -Indexes
+ServerSignature Off
+
+<IfModule mod_headers.c>
+    # Evita MIME sniffing
+    Header always set X-Content-Type-Options "nosniff"
+
+    # No filtrar referrer a sitios externos
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    # Deshabilitar APIs del navegador que no se usan
+    Header always set Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+
+    # Forzar HTTPS por 1 año
+    Header always set Strict-Transport-Security "max-age=31536000"
+
+    # CSP: solo puede ser embebido por el portal — bloquea embedding desde cualquier otro sitio
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src https://ihzgfcojethwxphbnlmg.supabase.co wss://ihzgfcojethwxphbnlmg.supabase.co https://cdnjs.cloudflare.com; object-src 'none'; base-uri 'self'; worker-src blob:; frame-ancestors https://zaiko-portal.colegiogoyavier.edu.co 'self';"
+</IfModule>
+
+# Bloquear acceso a archivos sensibles
+<FilesMatch "\.(?:htaccess|htpasswd|ini|log|sh|sql|bak|env)$">
+    Require all denied
+</FilesMatch>
