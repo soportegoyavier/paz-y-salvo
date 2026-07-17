@@ -7,3 +7,6 @@ tests/.env.test
 tests/node_modules/
 tests/playwright-report/
 tests/test-results/
+
+# Cache del CLI de Supabase
+supabase/.temp/

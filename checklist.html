@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Paz y Salvo — Checklist de Verificación Manual</title>
+<style>
+:root {
+  --bg:         #F8F7FF;
+  --surface:    #FFFFFF;
+  --surface2:   #F2F0FF;
+  --border:     #E4E1FF;
+  --border2:    #C7D2FE;
+  --text:       #23213D;
+  --text2:      #6B68A0;
+  --text3:      #ADA9CC;
+  --accent:     #7C83FD;
+  --accent2:    #5A62F5;
+  --green:      #22C55E;
+  --green-bg:   rgba(34,197,94,0.10);
+  --red:        #EF4444;
+  --red-bg:     rgba(239,68,68,0.10);
+  --yellow:     #F59E0B;
+  --yellow-bg:  rgba(245,158,11,0.10);
+  --radius:     14px;
+  --radius-sm:  10px;
+  --shadow:     0 2px 16px rgba(100,90,200,0.09);
+  --shadow-lg:  0 10px 48px rgba(100,90,200,0.16);
+  --font-serif: 'DM Serif Display', Georgia, serif;
+  --font-sans:  'DM Sans', system-ui, sans-serif;
+  --font-mono:  'JetBrains Mono', monospace;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+#header {
+  position: sticky; top: 0; z-index: 100;
+  background: rgba(248,247,255,0.92);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 24px;
+}
+#header-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; gap:12px; flex-wrap:wrap; }
+#header-title { font-family: var(--font-serif); font-size: 1.15rem; color: var(--text); }
+#header-title span { color: var(--text2); font-size: 0.75rem; font-family: var(--font-sans); display:block; margin-top:2px; }
+#header-count { font-size: 0.85rem; color: var(--text2); white-space:nowrap; }
+#progress-bar-wrap { height:6px; background:var(--surface2); border-radius:3px; overflow:hidden; }
+#progress-bar { height:100%; width:0%; border-radius:3px; background:linear-gradient(90deg, var(--accent), var(--green)); transition:width .4s cubic-bezier(.4,0,.2,1); }
+
+#main { max-width: 900px; margin: 0 auto; padding: 24px 16px 60px; }
+
+#warning {
+  background: var(--yellow-bg); border: 1px solid rgba(245,158,11,0.35);
+  border-radius: var(--radius); padding: 14px 18px; margin-bottom: 20px;
+  font-size: 0.85rem; color: var(--text);
+}
+#warning b { color: #92640a; }
+
+#hero {
+  padding: 28px 24px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 20px; box-shadow: var(--shadow);
+}
+#hero h1 { font-family: var(--font-serif); font-size: 1.6rem; color: var(--text); margin-bottom: 6px; }
+#hero p { color: var(--text2); font-size: 0.9rem; }
+
+#summary {
+  background: var(--surface); border-radius: var(--radius);
+  padding: 18px 24px; margin-bottom: 20px;
+  border: 1px solid var(--border); box-shadow: var(--shadow);
+  display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; text-align:center;
+}
+.sum-num { font-size: 1.8rem; font-weight: 800; color: var(--accent2); font-family: var(--font-mono); }
+.sum-lbl { font-size: 0.72rem; color: var(--text2); margin-top: 2px; }
+
+.toolbar { display:flex; gap:10px; margin-bottom: 20px; flex-wrap:wrap; }
+.toolbar button {
+  font-family: var(--font-sans); font-size: 0.8rem; font-weight:600;
+  padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border2);
+  background: var(--surface); color: var(--text2); cursor:pointer; transition: all .15s;
+}
+.toolbar button:hover { background: var(--surface2); color: var(--text); }
+
+.section {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 12px; overflow:hidden;
+  box-shadow: var(--shadow); transition: border-color .3s;
+}
+.section.completed { border-color: rgba(34,197,94,0.45); }
+.section-header {
+  display:flex; align-items:center; gap:12px; padding: 14px 18px;
+  cursor:pointer; user-select:none; transition: background .2s;
+}
+.section-header:hover { background: var(--surface2); }
+.section-icon { font-size: 1.2rem; flex-shrink:0; }
+.section-title { font-size: 0.92rem; font-weight:700; flex:1; }
+.section-badge {
+  font-size: 0.7rem; font-weight:700; padding: 2px 9px; border-radius: 20px;
+  background: var(--surface2); color: var(--text2); white-space:nowrap;
+}
+.section-badge.done { background: var(--green-bg); color: #158a44; }
+.section-chevron { font-size:0.7rem; color:var(--text2); transition: transform .25s; }
+.section.open .section-chevron { transform: rotate(180deg); }
+.section-body { display:none; padding: 4px 18px 14px; border-top: 1px solid var(--border); }
+.section.open .section-body { display:block; }
+
+.item {
+  display:flex; align-items:flex-start; gap:10px; padding: 9px 6px;
+  border-radius: 8px; cursor:pointer; transition: background .15s;
+}
+.item:hover { background: var(--surface2); }
+.item input[type=checkbox] { display:none; }
+.item-check {
+  width: 19px; height: 19px; flex-shrink:0; margin-top:1px;
+  border: 2px solid var(--border2); border-radius: 5px;
+  display:flex; align-items:center; justify-content:center;
+  font-size: 11px; transition: all .2s; background: var(--surface2);
+}
+.item.checked .item-check { background: var(--green); border-color: var(--green); color:#fff; }
+.item-label { font-size: 0.86rem; line-height: 1.45; color: var(--text); }
+.item.checked .item-label { color: var(--text3); text-decoration: line-through; }
+.item-note { font-size: 0.74rem; color: var(--text2); margin-top: 2px; }
+
+#footer { text-align:center; padding: 20px; color: var(--text3); font-size: 0.75rem; }
+
+@media print {
+  #header, .toolbar { display:none; }
+  .section-body { display:block !important; }
+  .section { break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div id="header-top">
+    <div id="header-title">Paz y Salvo — Checklist de Verificación Manual<span>Colegio Campestre Goyavier · basado en el comportamiento real de ps-api</span></div>
+    <span id="header-count">0 / 0 completados</span>
+  </div>
+  <div id="progress-bar-wrap"><div id="progress-bar"></div></div>
+</div>
+
+<div id="main">
+
+  <div id="warning">
+    ⚠️ <b>Ejecutar siempre contra el proyecto de <u>staging</u></b>, nunca contra producción (<code>ihzgfcojethwxphbnlmg</code>). Usa los usuarios de prueba con prefijo <code>qa_</code> de <code>tests/fixtures/test-users.json</code> cuando existan.
+  </div>
+
+  <div id="hero">
+    <h1>Verificación funcional del sistema</h1>
+    <p>Checklist manual para confirmar que autenticación, roles, flujo de aprobación, generación de documentos, correos y seguridad se comportan como está diseñado. Se guarda automáticamente en este navegador.</p>
+  </div>
+
+  <div id="summary">
+    <div><div class="sum-num" id="sum-done">0</div><div class="sum-lbl">Verificados</div></div>
+    <div><div class="sum-num" id="sum-pct">0%</div><div class="sum-lbl">Completado</div></div>
+    <div><div class="sum-num" id="sum-left">0</div><div class="sum-lbl">Pendientes</div></div>
+  </div>
+
+  <div class="toolbar">
+    <button onclick="expandAll()">Expandir todo</button>
+    <button onclick="collapseAll()">Colapsar todo</button>
+    <button onclick="resetChecklist()">Reiniciar checklist</button>
+  </div>
+
+  <div id="sections-container"></div>
+
+  <div id="footer">Zaiko / Paz y Salvo QA · guarda el progreso en localStorage de este navegador</div>
+
+</div>
+
+<script>
+const SECTIONS = [
+  { icon: '🔐', title: 'Autenticación y sesión', items: [
+    'Login con email/password (Supabase Auth) funciona para un usuario de cada rol: COLABORADOR, ADMIN, SUPERADMIN',
+    'Login con Google fuera de iframe (popup) funciona y hace polling de sesión correctamente',
+    'Si la app corre embebida en iframe, el login con Google navega window.top al portal y vuelve autenticado',
+    'Auto-link por email: un usuario sin auth_user_id que inicia con Google queda vinculado automáticamente en su primer login',
+    'Al primer login con cambiar_password=true se fuerza el modal de cambio de contraseña antes de poder usar la app',
+    '"¿No recuerdas tu contraseña temporal?" envía correo con password nueva — solo si el usuario tiene auth_user_id vinculado',
+    'La sesión persiste al recargar la página (F5) sin pedir login de nuevo',
+    'Logout limpia la sesión y redirige correctamente a la pantalla de login',
+    'Acceder por URL directa sin sesión activa redirige a login (no muestra datos)',
+    'Cualquier acción protegida sin JWT válido responde 401',
+  ]},
+  { icon: '🙋', title: 'Rol COLABORADOR', items: [
+    'El menú muestra únicamente "Mi Estado" y "Enviar Paz y Salvo"',
+    '"Mi Estado" muestra solo las áreas que le corresponden según su tipo_colaborador y nivel_educativo',
+    'No aparece ningún botón de aprobar/rechazar en ninguna área',
+    'Llamar generar_documento o descargar_pdf por API devuelve 403 explícito',
+    'No puede leer ni actualizar aprobaciones de otro colaborador (RLS bloquea, 0 filas, sin error)',
+    'No puede acceder a get_usuarios, get_all_colaboradores, get_config ni a los logs de auditoría',
+  ]},
+  { icon: '🧑‍💼', title: 'Rol ADMIN (jefe de área)', items: [
+    'El menú muestra "Mi área" (Colaboradores, Configuración) y "Mi paz y salvo" (Mi Estado, Enviar Paz y Salvo)',
+    'get_colaboradores_area lista solo colaboradores de su(s) área(s) y se autoexcluye a sí mismo',
+    'Puede aprobar un colaborador de su área y el cambio se refleja de inmediato',
+    'Rechazar sin observaciones (menos de 5 caracteres) es bloqueado por el backend',
+    'Rechazar revoca el código de verificación activo del colaborador (motivo REVOCADO)',
+    'aprobar_masivo aprueba correctamente una selección de colaboradores de su área',
+    'Si administra 2+ áreas, ve una pestaña por cada una y aprobar en una no afecta a la otra',
+    'Intentar aprobar/rechazar un área ajena por API es redirigido silenciosamente a su propia área (no rompe, pero tampoco aprueba la ajena)',
+    'No puede generar_documento/descargar_pdf de un colaborador si no tiene ninguna aprobación propia sobre él',
+    'Si el propio admin también es colaborador con paz y salvo pendiente en su área, no ve botón para autoaprobarse (estado OMITIDO)',
+    'Guardar el email de notificación de su área (set_emails_notificacion) persiste correctamente',
+  ]},
+  { icon: '🛡️', title: 'Rol SUPERADMIN', items: [
+    'El menú muestra "Gestión" (Colaboradores, Vista Global), "Sistema" (Configuración, Verificar Código) y "Mi paz y salvo"',
+    'Crear y editar un colaborador guarda correctamente tipo_colaborador, nivel_educativo y areas_requeridas',
+    'Crear y editar un usuario funciona, incluyendo el selector múltiple de áreas para rol ADMIN',
+    'crear_usuario y resetear_password envían correo con usuario y contraseña temporal',
+    'Activar/desactivar paz y salvo (individual y masivo) cambia requiere_paz_salvo correctamente',
+    'Carga masiva de colaboradores respeta el tope de 200 filas (probar 200 exacto y 201)',
+    'forzar_paz_salvo exige contraseña correcta antes de ejecutar y reemplaza el código de verificación (motivo REEMPLAZADO)',
+    'resetear_aprobaciones exige contraseña correcta y revoca el código de verificación (motivo REVOCADO)',
+    'Crear y editar un área funciona, incluyendo tipo GENERAL/DEPARTAMENTAL y el campo aplica_a',
+    'Vista Global carga la tabla completa y filtra correctamente por tipo de colaborador',
+    'El panel de Logs/Auditoría muestra las aprobaciones/rechazos recientes',
+    'Verificar Código revalida en vivo el estado (no usa un valor cacheado)',
+  ]},
+  { icon: '🧩', title: 'Rol combinado (Superadmin que también es jefe de área)', items: [
+    'El badge de rol muestra "Administrador" y el menú combina Mi área + Gestión + Sistema + Mi paz y salvo',
+    'Las acciones sobre su propia área (aprobar/rechazar) funcionan igual que para un ADMIN normal, sin botones duplicados de superadmin',
+  ]},
+  { icon: '✅', title: 'Flujo de aprobación y áreas requeridas', items: [
+    'Un docente de primaria ve exactamente las áreas GENERAL que aplican a DOCENTE/PRIMARIA más su jefe departamental propio',
+    'Un administrativo y un colaborador de servicios ven cada uno el conjunto de áreas correcto para su tipo_colaborador',
+    'Un colaborador sin ninguna área requerida nunca aparece como "COMPLETO" aunque requiera_paz_salvo sea true',
+    'Aprobar un área cambia su estado a APROBADO y se refleja de inmediato en Mi Estado y en Vista Global',
+    'Rechazar un área cambia su estado a RECHAZADO y activa el indicador tieneRechazados en Vista Global',
+    'Volver a aprobar un área previamente rechazada actualiza el estado limpiamente (sin estado intermedio raro)',
+    'pazYSalvoCompleto solo queda en true cuando TODAS las áreas requeridas están en APROBADO',
+  ]},
+  { icon: '📄', title: 'Documento, PDF e impresión', items: [
+    'Generar documento (servidor, pdf-lib) produce un PDF con nombre, cédula, dependencias certificadas, fecha de emisión, firma del responsable de TH y código de verificación',
+    'Si el PDF del servidor no llega o es demasiado pequeño, el fallback cliente (html2pdf.js) genera un PDF visualmente equivalente',
+    'El botón "Imprimir" abre una ventana nueva con el certificado y dispara el diálogo de impresión nativo',
+    'La descarga masiva de PDFs usa la misma plantilla que la descarga individual (mismo diseño y datos)',
+    'El nombre del archivo PDF descargado incluye el nombre del colaborador',
+    '5 descargas consecutivas de PDF no degradan el rendimiento ni producen archivos corruptos',
+  ]},
+  { icon: '📧', title: 'Correos automáticos', items: [
+    'crear_usuario y resetear_password envían correo con usuario y contraseña temporal',
+    'solicitar_password_default (self-service) envía correo solo si el usuario tiene auth_user_id vinculado',
+    'enviar_recordatorio llega solo a los admins de las áreas realmente pendientes, no a las ya aprobadas',
+    'enviar_solicitud_th adjunta el PDF cuando corresponde y funciona en modo preview sin enviar correo real',
+    'Si no hay email de Talento Humano configurado, la operación responde ok sin enviar correo (no falla el flujo)',
+    'Si faltan secretos SMTP, la operación responde "SMTP no configurado" sin romper el resto de la operación',
+  ]},
+  { icon: '🔎', title: 'Verificación pública de código', items: [
+    'Consultar un código PSG-XXXX-XXXXX válido con paz y salvo completo muestra el estado vigente correctamente',
+    'Un código válido se auto-revoca en la consulta si el estado real ya no se sostiene (ej. se rechazó un área después de emitido)',
+    'Un código revocado o reemplazado no valida como vigente',
+    'diagnosticar_login nunca expone la contraseña ni el hash del usuario',
+  ]},
+  { icon: '🔒', title: 'Seguridad y permisos cruzados', items: [
+    'Sin JWT válido, cualquier acción protegida responde 401',
+    'Un ADMIN no puede leer ni aprobar áreas ajenas a la(s) suya(s) llamando la API directamente',
+    'Un COLABORADOR no accede a get_usuarios, get_all_colaboradores, get_config ni a los logs',
+    'Inyectar HTML/script en campos de texto libre (nombre, observaciones de rechazo, email) se muestra escapado, no se ejecuta',
+    'El dominio real de producción (cPanel) puede llamar a la Edge Function sin error de CORS',
+  ]},
+  { icon: '⚡', title: 'Concurrencia', items: [
+    'Dos aprobaciones simultáneas en áreas distintas del mismo colaborador no se pisan entre sí',
+    'Aprobar y rechazar en paralelo la misma área termina en un estado consistente (uno de los dos, no ambos ni corrupto)',
+    'Múltiples consultas simultáneas de Mi Estado no duplican filas de aprobación',
+  ]},
+  { icon: '⚙️', title: 'Configuración general', items: [
+    'PROCESO_ACTIVO=false bloquea correctamente las operaciones que dependen del proceso activo',
+    'Cambiar EMAIL_TALENTO_HUMANO, NOMBRE_RESPONSABLE_TH e INSTITUCION_NOMBRE se refleja en el próximo documento generado',
+    'Vista Global y Mi Estado muestran cifras coherentes entre sí para el mismo colaborador',
+  ]},
+];
+
+const STORAGE_KEY = 'ps_checklist_state_v1';
+
+function loadState() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
+  catch { return {}; }
+}
+function saveState(state) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+let state = loadState();
+
+function itemId(si, ii) { return `s${si}_i${ii}`; }
+
+function render() {
+  const container = document.getElementById('sections-container');
+  container.innerHTML = '';
+  let totalItems = 0, totalDone = 0;
+
+  SECTIONS.forEach((section, si) => {
+    const sectionDone = section.items.filter((_, ii) => state[itemId(si, ii)]).length;
+    totalItems += section.items.length;
+    totalDone += sectionDone;
+
+    const sectionEl = document.createElement('div');
+    sectionEl.className = 'section' + (sectionDone === section.items.length ? ' completed' : '');
+    sectionEl.dataset.open = state[`open_${si}`] ? '1' : '0';
+    if (state[`open_${si}`]) sectionEl.classList.add('open');
+
+    const header = document.createElement('div');
+    header.className = 'section-header';
+    header.innerHTML = `
+      <span class="section-icon">${section.icon}</span>
+      <span class="section-title">${section.title}</span>
+      <span class="section-badge ${sectionDone === section.items.length ? 'done' : ''}">${sectionDone}/${section.items.length}</span>
+      <span class="section-chevron">▼</span>
+    `;
+    header.onclick = () => {
+      state[`open_${si}`] = !state[`open_${si}`];
+      saveState(state);
+      render();
+    };
+
+    const body = document.createElement('div');
+    body.className = 'section-body';
+    section.items.forEach((label, ii) => {
+      const id = itemId(si, ii);
+      const checked = !!state[id];
+      const item = document.createElement('div');
+      item.className = 'item' + (checked ? ' checked' : '');
+      item.innerHTML = `<div class="item-check">${checked ? '✓' : ''}</div><div class="item-label">${label}</div>`;
+      item.onclick = () => {
+        state[id] = !state[id];
+        saveState(state);
+        render();
+      };
+      body.appendChild(item);
+    });
+
+    sectionEl.appendChild(header);
+    sectionEl.appendChild(body);
+    container.appendChild(sectionEl);
+  });
+
+  document.getElementById('header-count').textContent = `${totalDone} / ${totalItems} completados`;
+  document.getElementById('sum-done').textContent = totalDone;
+  document.getElementById('sum-left').textContent = totalItems - totalDone;
+  const pct = totalItems ? Math.round((totalDone / totalItems) * 100) : 0;
+  document.getElementById('sum-pct').textContent = pct + '%';
+  document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+function expandAll() {
+  SECTIONS.forEach((_, si) => state[`open_${si}`] = true);
+  saveState(state); render();
+}
+function collapseAll() {
+  SECTIONS.forEach((_, si) => state[`open_${si}`] = false);
+  saveState(state); render();
+}
+function resetChecklist() {
+  if (!confirm('¿Reiniciar todo el checklist? Se perderá el progreso guardado.')) return;
+  state = {};
+  saveState(state); render();
+}
+
+render();
+</script>
+
+</body>
+</html>
