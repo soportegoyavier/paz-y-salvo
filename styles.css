@@ -240,6 +240,18 @@ body {
 }
 .sidebar-item .icon { font-size: 1rem; width: 20px; text-align: center; }
 
+.sidebar-footer {
+  margin-top: 1rem;
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--text3);
+  text-align: center;
+}
+.sidebar-footer a { color: var(--text3); text-decoration: underline; }
+.sidebar-footer a:hover { color: var(--accent); }
+
 /* ── CONTENT ─────────────────────────────────────────── */
 .content { padding: 2rem; overflow-y: auto; background: var(--bg); }
 .content-panel { display: none; }
