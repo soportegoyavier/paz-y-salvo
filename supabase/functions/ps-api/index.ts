@@ -99,20 +99,29 @@ async function procesoActivo(): Promise<boolean> {
 }
 
 // ─── EMAIL (SMTP) ─────────────────────────────────────────────────────────────
-async function enviarCorreo(
-  to: string, subject: string, html: string,
-  attachments?: { filename: string; content: string; encoding: string; contentType: string }[]
-): Promise<{ ok: boolean; error?: string }> {
+// pool=true reutiliza la conexión SMTP entre envíos (ver accionEnviarRecordatorio,
+// que manda varios correos en un mismo loop) en vez de abrir handshake+auth por cada uno.
+function crearTransporterSMTP(pool = false) {
   const host = Deno.env.get('SMTP_HOST')
   const port = parseInt(Deno.env.get('SMTP_PORT') ?? '587')
   const user = Deno.env.get('SMTP_USER')
   const pass = Deno.env.get('SMTP_PASS')
-  const from = Deno.env.get('SMTP_FROM') ?? user
+  if (!host || !user || !pass) return null
+  return nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass }, pool })
+}
 
-  if (!host || !user || !pass) return { ok: false, error: 'SMTP no configurado' }
+async function enviarCorreo(
+  to: string, subject: string, html: string,
+  attachments?: { filename: string; content: string; encoding: string; contentType: string }[],
+  // deno-lint-ignore no-explicit-any
+  transporterExistente?: any
+): Promise<{ ok: boolean; error?: string }> {
+  const from = Deno.env.get('SMTP_FROM') ?? Deno.env.get('SMTP_USER')
+  const transporter = transporterExistente ?? crearTransporterSMTP()
+
+  if (!transporter) return { ok: false, error: 'SMTP no configurado' }
 
   try {
-    const transporter = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } })
     await transporter.sendMail({ from, to, subject, html, attachments })
     return { ok: true }
   } catch (e) {
@@ -121,15 +130,6 @@ async function enviarCorreo(
 }
 
 // ─── HELPERS DE NEGOCIO ───────────────────────────────────────────────────────
-function generarPasswordDefault(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
-  let pwd = ''
-  const arr = new Uint8Array(8)
-  crypto.getRandomValues(arr)
-  for (const b of arr) pwd += chars[b % chars.length]
-  return pwd
-}
-
 async function emailCredenciales(to: string, username: string, password: string): Promise<void> {
   await enviarCorreo(
     to,
@@ -148,8 +148,8 @@ async function emailCredenciales(to: string, username: string, password: string)
            <td style="padding:10px 14px;border:1px solid #e2e8f0;font-family:monospace;font-size:16px;letter-spacing:1px">${password}</td>
          </tr>
        </table>
-       <p style="color:#dc2626;font-size:0.875rem;margin-bottom:1.5rem">
-         <strong>Al ingresar por primera vez deberás cambiar esta contraseña temporal.</strong>
+       <p style="color:#475569;font-size:0.875rem;margin-bottom:1.5rem">
+         Guarda esta contraseña en un lugar seguro. Si necesitas cambiarla, contacta al administrador.
        </p>
        <p style="text-align:center;margin:24px 0">
          <a href="https://zaiko-pazsalvo.colegiogoyavier.edu.co/"
@@ -270,8 +270,13 @@ async function getExtraAreasMap(): Promise<Record<string, Set<string>>> {
 }
 
 // ─── COLABORADOR: MI ESTADO ───────────────────────────────────────────────────
-async function accionGetMiEstado(body: Body) {
-  const cedula = String(body.cedula || '').trim()
+async function accionGetMiEstado(body: Body, ses: SessionData) {
+  // Autoservicio: "mi estado" es siempre sobre la propia identidad. Si la sesión
+  // ya tiene cédula vinculada (claims del JWT), se ignora cualquier valor que
+  // venga del cliente — evita que un usuario consulte el estado de otro
+  // colaborador (IDOR). Si aún no tiene cédula vinculada (primer ingreso, ej.
+  // login por Google), se respeta el flujo de auto-vinculación existente.
+  const cedula = ses.cedula ? ses.cedula.trim() : String(body.cedula || '').trim()
   if (!cedula) return { ok: false, error: 'Cédula requerida' }
   const cNorm = normCedula(cedula)
 
@@ -623,26 +628,6 @@ async function accionResetearPassword(body: Body, ses: SessionData) {
 
   await log(ses.username, ses.rol, 'RESET_PASSWORD', `ID: ${id}`)
   return { ok: true, mensaje: 'Contraseña restablecida correctamente' }
-}
-
-async function accionSolicitarPasswordDefault(ses: SessionData) {
-  const { data: u } = await supabase.from('ps_usuarios')
-    .select('email, username, auth_user_id')
-    .eq('id', ses.usuarioId).single()
-  if (!u) return { ok: false, error: 'Usuario no encontrado' }
-  if (!u.email || !isValidEmail(u.email))
-    return { ok: false, error: 'No tienes un correo válido registrado. Contacta al administrador.' }
-  if (!u.auth_user_id)
-    return { ok: false, error: 'Tu cuenta aún no está vinculada. Contacta al administrador.' }
-
-  const nuevaPassword = generarPasswordDefault()
-  const { error } = await supabase.auth.admin.updateUserById(u.auth_user_id, { password: nuevaPassword })
-  if (error) return { ok: false, error: error.message }
-
-  await supabase.from('ps_usuarios').update({ cambiar_password: true }).eq('id', ses.usuarioId)
-  await emailCredenciales(u.email, u.username, nuevaPassword)
-  await log(ses.username, ses.rol, 'SOLICITAR_PASSWORD_DEFAULT', 'Contraseña temporal enviada por correo')
-  return { ok: true, mensaje: `Se envió la contraseña temporal a ${u.email}` }
 }
 
 async function accionCambiarPassword(body: Body, ses: SessionData) {
@@ -1139,7 +1124,33 @@ async function accionDescargarPdf(body: Body, ses: SessionData) {
 }
 
 // ─── VERIFICAR CÓDIGO (público) ───────────────────────────────────────────────
-async function accionVerificarCodigo(body: Body) {
+// Límite de tasa por IP: acción pública sin autenticar, el código tiene un
+// espacio de combinaciones acotado (~36^5) — sin límite es fuerza-bruteable
+// para enumerar nombre+cédula de colaboradores. Ventana fija de 1 minuto,
+// mismo patrón que ce_consulta_contador en Control de Eventos.
+const VERIFICACION_LIMITE_POR_MINUTO = 20
+async function _verificacionRateLimit(ip: string): Promise<boolean> {
+  const ahora = new Date()
+  const ventanaActual = new Date(Math.floor(ahora.getTime() / 60000) * 60000).toISOString()
+  const { data: fila } = await supabase.from('ps_verificacion_contador')
+    .select('*').eq('ip', ip).maybeSingle()
+  // Comparar por timestamp, no por string: Postgres puede devolver el timestamptz
+  // con un formato de serialización distinto al toISOString() de JS.
+  if (!fila || new Date(fila.ventana).getTime() !== new Date(ventanaActual).getTime()) {
+    await supabase.from('ps_verificacion_contador')
+      .upsert({ ip, ventana: ventanaActual, intentos: 1 }, { onConflict: 'ip' })
+    return true
+  }
+  if (fila.intentos >= VERIFICACION_LIMITE_POR_MINUTO) return false
+  await supabase.from('ps_verificacion_contador')
+    .update({ intentos: fila.intentos + 1 }).eq('ip', ip)
+  return true
+}
+
+async function accionVerificarCodigo(body: Body, ip: string) {
+  const permitido = await _verificacionRateLimit(ip)
+  if (!permitido) return { ok: false, error: 'Demasiados intentos. Espera un minuto e inténtalo de nuevo.' }
+
   const codigo = String(body.codigo || '').trim().toUpperCase()
     .replace(/[‐-―−]/g, '-') // guiones "inteligentes" (en/em dash, signo menos) → "-"
     .replace(/\s+/g, '')                    // el copy/paste desde PDF a veces inserta espacios entre caracteres
@@ -1204,11 +1215,15 @@ async function accionVerificarCodigo(body: Body) {
 async function accionGetPendientesRecordatorio(body: Body, ses: SessionData) {
   let c: Record<string, unknown> | null = null
   if (body.cedula && !body.colaboradorId) {
+    // Autoservicio: solo se puede consultar la propia cédula vinculada.
+    const cedulaConsulta = ses.cedula ? ses.cedula.trim() : String(body.cedula).trim()
     const { data } = await supabase.from('ps_colaboradores').select('*')
-      .eq('cedula', String(body.cedula).trim()).eq('activo', true).maybeSingle()
+      .eq('cedula', cedulaConsulta).eq('activo', true).maybeSingle()
     c = data
-    console.log(`[pendientes_rec] lookup por cedula="${body.cedula}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
+    console.log(`[pendientes_rec] lookup por cedula="${cedulaConsulta}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
   } else {
+    // Búsqueda por ID: solo ADMIN/SUPERADMIN pueden consultar a otro colaborador.
+    if (!ADMIN(ses)) return { ok: false, error: 'Acceso denegado' }
     const { data } = await supabase.from('ps_colaboradores').select('*').eq('id', String(body.colaboradorId || '')).maybeSingle()
     c = data
     console.log(`[pendientes_rec] lookup por id="${body.colaboradorId}" rol=${ses.rol} → ${c ? c.nombre : 'no encontrado'}`)
@@ -1260,6 +1275,9 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
   const colaboradorNombre = String((r as Record<string, unknown>).colaboradorNombre || '')
   const resultados: Body[] = []
   let enviados = 0
+  // Un solo transporter con pool para todo el lote — evita abrir conexión+auth SMTP
+  // por cada área (con varios pendientes eso superaba el timeout del frontend).
+  const transporter = crearTransporterSMTP(true)
 
   for (const p of pendientes) {
     const adminEmail = String(p.adminEmail || '')
@@ -1282,11 +1300,15 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
          </p>
          <hr style="margin:16px 0;border:none;border-top:1px solid #eee">
          <p style="color:#888;font-size:12px">Sistema de Paz y Salvo — Colegio Campestre Goyavier</p>
-       </div>`
+       </div>`,
+      undefined,
+      transporter
     )
     if (res.ok) enviados++
     resultados.push({ nombre: p.areaNombre, adminEmail, enviado: res.ok, error: res.error ?? null })
   }
+
+  transporter?.close()
 
   await log(ses.username, ses.rol, 'ENVIAR_RECORDATORIO',
     `${colaboradorNombre} — ${enviados}/${pendientes.length} enviados`)
@@ -1294,7 +1316,12 @@ async function accionEnviarRecordatorio(body: Body, ses: SessionData) {
 }
 
 async function accionEnviarSolicitudTH(body: Body, ses: SessionData) {
-  const r = await accionGenerarDocumento(body, ses)
+  // Autoservicio: un colaborador solo puede enviar su propio paz y salvo a
+  // Talento Humano. Si la sesión ya tiene cédula vinculada, se ignora
+  // cualquier otro valor recibido del cliente (evita suplantar el envío del
+  // acta de otra persona).
+  const bodyScoped: Body = ses.cedula ? { ...body, cedula: ses.cedula, colaboradorId: undefined } : body
+  const r = await accionGenerarDocumento(bodyScoped, ses)
   if (!r.ok) return { ok: false, error: (r as Record<string, string>).error || 'Error generando documento' }
 
   const doc = (r as Record<string, Record<string, unknown>>).documento
@@ -1354,8 +1381,12 @@ async function accionDiagnosticarLogin(body: Body) {
   const { data: u } = await supabase.from('ps_usuarios').select('*').ilike('username', String(body.username || '')).maybeSingle()
   if (!u) return { ok: true, existe: false, mensaje: 'Usuario no encontrado' }
   const pActivo = await procesoActivo()
-  return { ok: true, existe: true, username: u.username, rol: u.rol, activo: u.activo,
-           tieneAuth: !!(u.auth_user_id), email: u.email || '', procesoActivo: pActivo,
+  // Acción pública sin autenticar: NO se exponen rol ni email — permitirían a
+  // cualquiera enumerar cuentas SUPERADMIN (objetivo de phishing dirigido) y
+  // direcciones de correo institucionales. El campo "mensaje" ya cubre el
+  // propósito de diagnóstico sin filtrar esos datos.
+  return { ok: true, existe: true, activo: u.activo,
+           tieneAuth: !!(u.auth_user_id), procesoActivo: pActivo,
            mensaje: !u.activo         ? 'Cuenta inactiva'
              : !u.auth_user_id        ? 'Sin cuenta Supabase Auth — ejecutar script de migración'
              : !pActivo && u.rol !== 'SUPERADMIN' ? 'Proceso no activo'
@@ -1380,6 +1411,9 @@ Deno.serve(async (req) => {
   const origin = req.headers.get('Origin') ?? ''
   // Wrapper local para no pasar origin en cada llamada dentro de este handler
   const resp = (data: unknown, status = 200) => jsonResp(data, status, origin)
+  // IP real del cliente (Supabase Edge Functions corren detrás de un proxy que
+  // añade x-forwarded-for); solo se usa para el límite de tasa de verificar_codigo.
+  const ip = (req.headers.get('x-forwarded-for') ?? '').split(',')[0].trim() || 'desconocida'
 
   if (req.method === 'OPTIONS') return new Response(null, { headers: getCorsHeaders(origin) })
   if (req.method !== 'POST')    return resp({ ok: false, error: 'Método no permitido' }, 405)
@@ -1429,22 +1463,21 @@ Deno.serve(async (req) => {
   try {
     switch (action) {
       // Públicas
-      case 'verificar_codigo':  return jsonResp(await accionVerificarCodigo(body))
+      case 'verificar_codigo':  return jsonResp(await accionVerificarCodigo(body, ip))
       case 'diagnosticar_login':return jsonResp(await accionDiagnosticarLogin(body))
 
       // Cualquier sesión activa
       case 'verify_session': {
-        const { data: uVS } = await supabase.from('ps_usuarios').select('cambiar_password, cedula').eq('id', ses!.usuarioId).maybeSingle()
+        const { data: uVS } = await supabase.from('ps_usuarios').select('cedula').eq('id', ses!.usuarioId).maybeSingle()
         let nombreCompleto: string | null = null
         if (uVS?.cedula) {
           const { data: colVS } = await supabase.from('ps_colaboradores').select('nombre').eq('cedula', uVS.cedula).maybeSingle()
           nombreCompleto = colVS?.nombre ?? null
         }
-        return jsonResp({ ok: true, rol: ses!.rol, username: ses!.username, nombre: nombreCompleto, cambiarPassword: uVS?.cambiar_password ?? false })
+        return jsonResp({ ok: true, rol: ses!.rol, username: ses!.username, nombre: nombreCompleto })
       }
-      case 'get_mi_estado':               return jsonResp(await accionGetMiEstado(body))
+      case 'get_mi_estado':               return jsonResp(await accionGetMiEstado(body, ses!))
       case 'cambiar_password':            return jsonResp(await accionCambiarPassword(body, ses!))
-      case 'solicitar_password_default':  return jsonResp(await accionSolicitarPasswordDefault(ses!))
       case 'get_pendientes_recordatorio': return jsonResp(await accionGetPendientesRecordatorio(body, ses!))
       case 'enviar_recordatorio':         return jsonResp(await accionEnviarRecordatorio(body, ses!))
       case 'enviar_solicitud_th':         return jsonResp(await accionEnviarSolicitudTH(body, ses!))
@@ -1462,9 +1495,18 @@ Deno.serve(async (req) => {
           : await accionGenerarDocumento(body, ses!))
       }
       case 'get_areas':                   return jsonResp(await accionGetAreas())
-      case 'get_estado_colaborador':      return jsonResp(await accionGetEstadoColaborador(body))
-      case 'get_config_admin':            return jsonResp(await accionGetConfigAdmin(ses!))
-      case 'set_emails_notificacion':     return jsonResp(await accionSetEmailsNotificacion(body, ses!))
+      case 'get_estado_colaborador': {
+        if (!SA(ses!)) return jsonResp({ ok: false, error: 'Acceso denegado' })
+        return jsonResp(await accionGetEstadoColaborador(body))
+      }
+      case 'get_config_admin': {
+        if (!ADMIN(ses!)) return jsonResp({ ok: false, error: 'Acceso denegado' })
+        return jsonResp(await accionGetConfigAdmin(ses!))
+      }
+      case 'set_emails_notificacion': {
+        if (!ADMIN(ses!)) return jsonResp({ ok: false, error: 'Acceso denegado' })
+        return jsonResp(await accionSetEmailsNotificacion(body, ses!))
+      }
 
       // ADMIN o SUPERADMIN
       case 'get_colaboradores_area': {

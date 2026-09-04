@@ -282,13 +282,6 @@ async function _iniciarDesdeSession(session) {
       if (window.location.hash) window.history.replaceState(null, '', window.location.pathname);
       _hideSplash();
       iniciarApp();
-      if (rv.cambiarPassword) {
-        document.getElementById("pl-actual").value    = "";
-        document.getElementById("pl-nueva").value     = "";
-        document.getElementById("pl-confirmar").value = "";
-        document.getElementById("pl-error").classList.remove("visible");
-        abrirModal("modal-primer-login");
-      }
       return true;
     }
     await supabaseClient.auth.signOut();
@@ -367,7 +360,7 @@ let STATE = {
 };
 
 // ── API ──────────────────────────────────────────────────
-async function api(action, data = {}, _token = null) {
+async function api(action, data = {}, _token = null, timeoutMs = 12000) {
   const body    = { action, ...data };
   const headers = { "Content-Type": "application/json" };
   try {
@@ -376,7 +369,7 @@ async function api(action, data = {}, _token = null) {
       : null);
     if (token) headers["Authorization"] = "Bearer " + token;
     const ctrl = new AbortController();
-    const tid  = setTimeout(() => ctrl.abort(), 12000);
+    const tid  = setTimeout(() => ctrl.abort(), timeoutMs);
     const res  = await fetch(BACKEND_URL, { method:"POST", headers, body: JSON.stringify(body), signal: ctrl.signal });
     clearTimeout(tid);
     const json = await res.json();
@@ -507,7 +500,7 @@ async function handleLogin() {
       _resetBtn(); return;
     }
 
-    // Obtener estado completo desde el backend (incluye cambiarPassword y nombre)
+    // Obtener estado completo desde el backend (incluye el nombre completo)
     const vsR = await api("verify_session");
     if (!vsR.ok) {
       await supabaseClient.auth.signOut();
@@ -517,16 +510,6 @@ async function handleLogin() {
     }
 
     STATE.nombreCompleto = vsR.nombre || null;
-
-    if (vsR.cambiarPassword) {
-      document.getElementById("pl-actual").value    = "";
-      document.getElementById("pl-nueva").value     = "";
-      document.getElementById("pl-confirmar").value = "";
-      document.getElementById("pl-error").classList.remove("visible");
-      abrirModal("modal-primer-login");
-      _resetBtn();
-      return;
-    }
 
     const areasR = await api("get_areas");
     if (areasR.ok) {
@@ -567,75 +550,6 @@ function handleLogout() {
   document.getElementById("login-error").classList.remove("visible");
   // Reiniciar animación del canvas del login
   if (window._restartLoginCanvas) window._restartLoginCanvas();
-}
-
-async function handleCambiarPasswordPrimerLogin() {
-  const actual    = document.getElementById("pl-actual").value;
-  const nueva     = document.getElementById("pl-nueva").value;
-  const confirmar = document.getElementById("pl-confirmar").value;
-  const errEl     = document.getElementById("pl-error");
-  const btn       = document.getElementById("pl-btn");
-
-  errEl.classList.remove("visible");
-  if (!nueva || !confirmar) {
-    errEl.textContent = "Ingresa y confirma la nueva contraseña.";
-    errEl.classList.add("visible"); return;
-  }
-  if (nueva !== confirmar) {
-    errEl.textContent = "Las contraseñas no coinciden.";
-    errEl.classList.add("visible"); return;
-  }
-  if (nueva.length < 6) {
-    errEl.textContent = "La nueva contraseña debe tener al menos 6 caracteres.";
-    errEl.classList.add("visible"); return;
-  }
-  if (actual && nueva === actual) {
-    errEl.textContent = "La nueva contraseña debe ser diferente a la temporal.";
-    errEl.classList.add("visible"); return;
-  }
-
-  btn.disabled = true;
-  btn.innerHTML = '<div class="loading-spinner" style="width:16px;height:16px;border-width:2px"></div> Guardando...';
-
-  const r = await api("cambiar_password", { passwordActual: actual, passwordNueva: nueva });
-
-  if (!r.ok) {
-    errEl.textContent = r.error || "Error al cambiar contraseña.";
-    errEl.classList.add("visible");
-    btn.disabled = false;
-    btn.innerHTML = "Guardar y continuar";
-    return;
-  }
-
-  cerrarModal("modal-primer-login");
-  const areasR = await api("get_areas");
-  if (areasR.ok) STATE.areasDisponibles = areasR.areas;
-  _guardarSesion();
-  iniciarApp();
-}
-
-async function solicitarPasswordDefault() {
-  const btn    = document.getElementById("pl-btn-solicitar");
-  const errEl  = document.getElementById("pl-error");
-  errEl.classList.remove("visible");
-  btn.disabled = true;
-  btn.textContent = "Enviando...";
-
-  const r = await api("solicitar_password_default");
-
-  btn.disabled = false;
-  btn.textContent = "¿No recuerdas tu contraseña temporal? Solicítala a tu correo";
-
-  if (r.ok) {
-    errEl.style.color = "var(--success, #16a34a)";
-    errEl.textContent = r.mensaje || "Contraseña temporal enviada. Revisa tu correo.";
-    errEl.classList.add("visible");
-    document.getElementById("pl-actual").value = "";
-  } else {
-    errEl.style.color = "";
-    errEl.textContent = r.error || "No se pudo enviar el correo.";
-    errEl.classList.add("visible");
-  }
 }
 
 // ── LOGIN CON GOOGLE — OAuth por ventana emergente (popup) ───────────────────
@@ -2931,13 +2845,14 @@ async function enviarRecordatorioDesdeModal() {
     ? { cedula: ctx.cedula, areaIds }
     : { colaboradorId: ctx.colaboradorId, areaIds };
 
-  const r = await api("enviar_recordatorio", payload);
+  const r = await api("enviar_recordatorio", payload, null, 30000);
   if (!r.ok) { toast(r.error, "error"); return; }
 
-  toast(r.mensaje, "success");
-  if (r.errores && r.errores.length) {
-    r.errores.forEach(e => toast("Sin correo: " + e, "error"));
-  }
+  const resultados = r.resultados || [];
+  const fallidos = resultados.filter(d => !d.enviado);
+  const tipo = !fallidos.length ? "success" : (fallidos.length === resultados.length ? "error" : "info");
+  toast(r.mensaje, tipo);
+  fallidos.forEach(d => toast(`${d.nombre}: ${d.error || "no se pudo enviar"}`, "error"));
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2946,7 +2861,7 @@ async function enviarRecordatorioDesdeModal() {
 async function forzarPazSalvo(colaboradorId, nombre) {
   const password = await confirmConPassword(
     "⚡ Forzar Paz y Salvo",
-    `Esto aprobará <strong>todas las áreas</strong> para <strong>${nombre}</strong> como si cada administrador lo hubiera aprobado.<br><br>Esta acción queda registrada en los logs.`,
+    `Esto aprobará <strong>todas las áreas</strong> para <strong>${esc(nombre)}</strong> como si cada administrador lo hubiera aprobado.<br><br>Esta acción queda registrada en los logs.`,
     "Sí, forzar"
   );
   if (!password) return;
@@ -2961,7 +2876,7 @@ async function forzarPazSalvo(colaboradorId, nombre) {
 async function resetearAprobaciones(colaboradorId, nombre) {
   const password = await confirmConPassword(
     "🗑️ Resetear aprobaciones",
-    `Esto eliminará <strong>todas las aprobaciones</strong> de <strong>${nombre}</strong>, dejándolo en estado PENDIENTE en todas sus áreas.<br><br>Esta acción no se puede deshacer.`,
+    `Esto eliminará <strong>todas las aprobaciones</strong> de <strong>${esc(nombre)}</strong>, dejándolo en estado PENDIENTE en todas sus áreas.<br><br>Esta acción no se puede deshacer.`,
     "Sí, resetear"
   );
   if (!password) return;
@@ -3158,7 +3073,10 @@ function _generarHtmlCertificado(doc, logoDataUrl) {
 // igual que hacía file.getAs('application/pdf') en la versión GAS original.
 function _generarDocumentoPrint(doc, logoDataUrl) {
   const inner = _generarHtmlCertificado(doc, logoDataUrl);
-  const nombre = String(doc.nombre || '').replace(/\s+/g, '_');
+  // esc() aquí es obligatorio: este HTML se inyecta con document.write() en una
+  // ventana real (ver _abrirImpresion), así que cualquier `<`/`>`/`"` sin escapar
+  // en el nombre rompería fuera de <title> y ejecutaría en esa ventana.
+  const nombre = esc(String(doc.nombre || '').replace(/\s+/g, '_'))
   return `<!DOCTYPE html><html lang="es"><head>
 <meta charset="UTF-8">
 <title>PazYSalvo_${nombre}</title>
@@ -3400,10 +3318,7 @@ document.addEventListener("keydown", e => {
     if (document.getElementById("screen-login").classList.contains("active")) handleLogin();
   }
   if (e.key === "Escape") {
-    document.querySelectorAll(".modal-overlay.active").forEach(m => {
-      if (m.id === "modal-primer-login") return; // no se puede cerrar con Escape
-      m.classList.remove("active");
-    });
+    document.querySelectorAll(".modal-overlay.active").forEach(m => m.classList.remove("active"));
     resolveConfirm(false);
   }
 });
