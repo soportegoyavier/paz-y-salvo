@@ -54,20 +54,7 @@ export async function loginAs(page: Page, rol: RolKey): Promise<void> {
     ).catch(() => false);
     if (appActive) return;
 
-    // 2. Modal de primer login — completarlo y continuar
-    const modalActive = await page.locator('#modal-primer-login').evaluate(
-      el => el.classList.contains('active')
-    ).catch(() => false);
-    if (modalActive) {
-      await page.fill('#pl-actual', password);
-      await page.fill('#pl-nueva', password);
-      await page.fill('#pl-confirmar', password);
-      await page.click('#pl-btn');
-      await page.locator('#screen-app').waitFor({ state: 'visible', timeout: 15_000 });
-      return;
-    }
-
-    // 3. Error de login visible — fallar con mensaje útil
+    // 2. Error de login visible — fallar con mensaje útil
     const errVisible = await page.locator('#login-error').evaluate(
       el => el.classList.contains('visible') ? (el as HTMLElement).innerText.trim() : ''
     ).catch(() => '');

@@ -181,8 +181,7 @@ const SECTIONS = [
     'Login con Google fuera de iframe (popup) funciona y hace polling de sesión correctamente',
     'Si la app corre embebida en iframe, el login con Google navega window.top al portal y vuelve autenticado',
     'Auto-link por email: un usuario sin auth_user_id que inicia con Google queda vinculado automáticamente en su primer login',
-    'Al primer login con cambiar_password=true se fuerza el modal de cambio de contraseña antes de poder usar la app',
-    '"¿No recuerdas tu contraseña temporal?" envía correo con password nueva — solo si el usuario tiene auth_user_id vinculado',
+    'El login entra directo a la app con la contraseña asignada — no hay modal de cambio de contraseña forzado',
     'La sesión persiste al recargar la página (F5) sin pedir login de nuevo',
     'Logout limpia la sesión y redirige correctamente a la pantalla de login',
     'Acceder por URL directa sin sesión activa redirige a login (no muestra datos)',
@@ -246,7 +245,6 @@ const SECTIONS = [
   ]},
   { icon: '📧', title: 'Correos automáticos', items: [
     'crear_usuario y resetear_password envían correo con usuario y contraseña temporal',
-    'solicitar_password_default (self-service) envía correo solo si el usuario tiene auth_user_id vinculado',
     'enviar_recordatorio llega solo a los admins de las áreas realmente pendientes, no a las ya aprobadas',
     'enviar_solicitud_th adjunta el PDF cuando corresponde y funciona en modo preview sin enviar correo real',
     'Si no hay email de Talento Humano configurado, la operación responde ok sin enviar correo (no falla el flujo)',
