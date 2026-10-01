@@ -1402,7 +1402,76 @@ async function accionGetLogs() {
 }
 
 // ─── ROUTER ───────────────────────────────────────────────────────────────────
-const PUBLIC_ACTIONS = new Set(['verificar_codigo', 'diagnosticar_login'])
+const PUBLIC_ACTIONS = new Set(['verificar_codigo', 'diagnosticar_login', 'sync_colaboradores_zaiko'])
+
+// ── DT-062 S4: sincronización de colaboradores desde Zaiko (servidor a servidor) ──
+// No usa sesión de usuario — se autentica con un secreto compartido (header
+// x-zaiko-sync-secret vs ZAIKO_SYNC_SECRET), mismo patrón que CRON_SECRET en Zaiko.
+// Zaiko es la fuente de identidad: solo da de alta a quien está activo aquí y no
+// existe, y actualiza el nombre si cambió. NUNCA inactiva (el retiro real sigue
+// siendo un proceso de Paz y Salvo, a mano) ni toca tipo_colaborador/nivel_educativo/
+// areas_requeridas/requiere_paz_salvo (son del dominio propio de Paz y Salvo). El
+// correo vive en ps_usuarios (cuenta de Supabase Auth), fuera de alcance de esto.
+async function accionSyncColaboradoresZaiko(body: Body, secretoRecibido: string) {
+  const secreto = Deno.env.get('ZAIKO_SYNC_SECRET')
+  if (!secreto || secretoRecibido !== secreto) return { ok: false, error: 'No autorizado' }
+
+  const { data: cfg } = await supabase.from('ps_zaiko_sync').select('modo').eq('id', 1).maybeSingle()
+  const modo = (cfg as { modo?: string } | null)?.modo || 'INFORME'
+  if (modo === 'PAUSADO') return { ok: true, mensaje: 'Sincronización pausada', modo }
+
+  const colaboradores = Array.isArray(body.colaboradores) ? (body.colaboradores as Record<string, unknown>[]) : []
+  const corte = typeof body.corte === 'string' ? body.corte : null
+  const acciones: Record<string, number> = { ALTA: 0, ACTUALIZAR: 0, INACTIVO_EN_ZAIKO: 0 }
+  const informe: Record<string, unknown>[] = []
+
+  for (const c of colaboradores) {
+    const cedula = String(c.cedula || '').trim()
+    if (!cedula) continue
+    const activoEnZaiko = c.activo === true
+    const nombreZaiko = [c.nombres, c.primer_apellido, c.segundo_apellido]
+      .filter(Boolean).join(' ').trim().toUpperCase()
+    if (!nombreZaiko) continue
+
+    const { data: existenteRaw } = await supabase.from('ps_colaboradores').select('id, nombre, activo').eq('cedula', cedula).maybeSingle()
+    const existente = existenteRaw as { id: string; nombre: string; activo: boolean } | null
+
+    if (!existente) {
+      if (!activoEnZaiko) continue // nunca se da de alta a alguien ya inactivo en Zaiko
+      acciones.ALTA++
+      informe.push({ accion: 'ALTA', cedula, nombre_zaiko: nombreZaiko, nombre_ps: null, detalle: 'Activo en Zaiko, no existe en Paz y Salvo' })
+      if (modo === 'ESCRITURA') {
+        await supabase.from('ps_colaboradores').insert({
+          nombre: nombreZaiko, cedula, activo: true, requiere_paz_salvo: true,
+          tipo_colaborador: '', nivel_educativo: '', areas_requeridas: null,
+        })
+      }
+      continue
+    }
+
+    if (!activoEnZaiko && existente.activo) {
+      // Informativo nada más — Paz y Salvo decide cuándo inactivar (el retiro abre el proceso allá).
+      acciones.INACTIVO_EN_ZAIKO++
+      informe.push({ accion: 'INACTIVO_EN_ZAIKO', cedula, nombre_zaiko: nombreZaiko, nombre_ps: existente.nombre, detalle: 'Inactivo en Zaiko; Paz y Salvo decide cuándo inactivarlo aquí' })
+    }
+
+    if (existente.nombre !== nombreZaiko) {
+      acciones.ACTUALIZAR++
+      informe.push({ accion: 'ACTUALIZAR', cedula, nombre_zaiko: nombreZaiko, nombre_ps: existente.nombre, detalle: 'Nombre distinto' })
+      if (modo === 'ESCRITURA') {
+        await supabase.from('ps_colaboradores').update({ nombre: nombreZaiko }).eq('id', existente.id)
+      }
+    }
+  }
+
+  if (informe.length) await supabase.from('ps_zaiko_sync_informe').insert(informe)
+  if (modo === 'ESCRITURA' && corte) {
+    await supabase.from('ps_zaiko_sync').update({ ultimo_corte: corte, actualizado_en: new Date().toISOString() }).eq('id', 1)
+  }
+  await log('SISTEMA', 'CRON', 'SYNC_ZAIKO', `modo=${modo} leidos=${colaboradores.length} ${JSON.stringify(acciones)}`)
+
+  return { ok: true, modo, leidos: colaboradores.length, acciones }
+}
 const ADMIN_ROLES    = new Set(['ADMIN', 'SUPERADMIN'])
 const SA             = (s: SessionData) => s.rol === 'SUPERADMIN'
 const ADMIN          = (s: SessionData) => ADMIN_ROLES.has(s.rol)
@@ -1465,6 +1534,7 @@ Deno.serve(async (req) => {
       // Públicas
       case 'verificar_codigo':  return jsonResp(await accionVerificarCodigo(body, ip))
       case 'diagnosticar_login':return jsonResp(await accionDiagnosticarLogin(body))
+      case 'sync_colaboradores_zaiko': return jsonResp(await accionSyncColaboradoresZaiko(body, req.headers.get('x-zaiko-sync-secret') ?? ''))
 
       // Cualquier sesión activa
       case 'verify_session': {
