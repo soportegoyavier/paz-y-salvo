@@ -181,6 +181,17 @@ async function getAreaIdsDelColaborador(cedula: string): Promise<string[]> {
   return [...ids]
 }
 
+// area_id -> username del responsable asignado (usuario activo con esa área en area_ids).
+// Si hay varios, se prefiere ADMIN sobre SUPERADMIN y luego el username (orden estable).
+async function getResponsablePorArea(): Promise<Record<string, string>> {
+  const { data } = await supabase.from('ps_usuarios').select('username, rol, area_ids').in('rol', ['ADMIN', 'SUPERADMIN']).eq('activo', true)
+  const orden = (u: Record<string, any>) => (u.rol === 'ADMIN' ? '0' : '1') + String(u.username).toLowerCase()
+  const map: Record<string, string> = {}
+  for (const u of [...(data ?? [])].sort((a, b) => orden(a).localeCompare(orden(b))))
+    for (const id of u.area_ids ?? []) if (!map[String(id)]) map[String(id)] = String(u.username)
+  return map
+}
+
 async function getNombreAprobador(username: string): Promise<string> {
   if (!username) return ''
   const { data: u } = await supabase.from('ps_usuarios').select('cedula').eq('username', username).maybeSingle()
@@ -769,14 +780,38 @@ async function accionForzarPazSalvo(body: Body, ses: SessionData) {
   if (!c) return { ok: false, error: 'Colaborador no encontrado' }
   const { data: areasAll } = await supabase.from('ps_areas').select('*').eq('activo', true)
   if (!areasAll?.length) return { ok: false, error: 'No hay áreas activas' }
-  const rows = areasAll.map(area => ({
-    colaborador_id: String(body.colaboradorId), area_id: area.id, estado: 'APROBADO',
-    observaciones: '', aprobado_por: ses.username, fecha_accion: new Date().toISOString(),
-  }))
-  await supabase.from('ps_aprobaciones').upsert(rows, { onConflict: 'colaborador_id,area_id' })
-  await revocarCodigosColaborador(String(body.colaboradorId), 'REEMPLAZADO')
-  await log(ses.username, ses.rol, 'FORZAR_PAZ_SALVO', `${c.nombre} — ${areasAll.length} áreas`)
-  return { ok: true, mensaje: `Paz y salvo otorgado a ${c.nombre} en ${areasAll.length} área(s)` }
+
+  // Solo las áreas que le aplican a ESTE colaborador (misma fuente que el certificado),
+  // sin las que él mismo dirige (se omiten, igual que en accionGenerarDocumento).
+  const areasOmit = new Set(await getAreaIdsDelColaborador(String(c.cedula ?? '')))
+  const extraMap  = await getExtraAreasMap()
+  const areasReq  = getAreasRequeridas(c, areasAll, extraMap).filter(a => !areasOmit.has(a.id))
+  if (!areasReq.length) return { ok: false, error: 'El colaborador no tiene áreas requeridas para aprobar' }
+
+  // Cada área queda aprobada a nombre de su responsable asignado (no del SUPERADMIN que fuerza),
+  // porque ese nombre es el que se imprime en "Dependencias certificadas". Las aprobaciones
+  // genuinas que ya existan se conservan tal cual (aprobador y fecha reales).
+  const responsables = await getResponsablePorArea()
+  const { data: aprobsPrev } = await supabase.from('ps_aprobaciones').select('area_id, estado').eq('colaborador_id', c.id)
+  const yaAprobadas = new Set((aprobsPrev ?? []).filter(a => a.estado === 'APROBADO').map(a => String(a.area_id)))
+  const sinResponsable: string[] = []
+  const ahora = new Date().toISOString()
+  const rows = areasReq.filter(a => !yaAprobadas.has(String(a.id))).map(area => {
+    const resp = responsables[String(area.id)]
+    if (!resp) sinResponsable.push(String(area.nombre))
+    return { colaborador_id: String(c.id), area_id: area.id, estado: 'APROBADO',
+             observaciones: '', aprobado_por: resp || ses.username, fecha_accion: ahora }
+  })
+  if (rows.length) {
+    const { error } = await supabase.from('ps_aprobaciones').upsert(rows, { onConflict: 'colaborador_id,area_id' })
+    if (error) return { ok: false, error: error.message }
+  }
+  await revocarCodigosColaborador(String(c.id), 'REEMPLAZADO')
+  await log(ses.username, ses.rol, 'FORZAR_PAZ_SALVO',
+    `${c.nombre} — ${areasReq.length} áreas (${rows.length} forzadas)` +
+    (sinResponsable.length ? ` — sin responsable asignado: ${sinResponsable.join(', ')}` : ''))
+  return { ok: true, mensaje: `Paz y salvo otorgado a ${c.nombre} en ${areasReq.length} área(s)` +
+    (sinResponsable.length ? `. Sin responsable asignado (quedó tu usuario): ${sinResponsable.join(', ')}` : '') }
 }
 
 async function accionResetearAprobaciones(body: Body, ses: SessionData) {

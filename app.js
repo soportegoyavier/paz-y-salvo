@@ -5,6 +5,33 @@ function esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// En la BD el nombre viene como "NOMBRE(S) APELLIDO1 APELLIDO2" (ej. "ANA MARIA MONTAÑA MONOGA").
+// La clave de orden pasa los dos últimos apellidos al frente: "MONTAÑA MONOGA ANA MARIA".
+// Las partículas de apellidos compuestos (DE, DEL, DE LA, LOS, SAN...) se pegan al apellido que les sigue.
+const _PARTICULAS_APELLIDO = new Set(['DE', 'DEL', 'LA', 'LAS', 'LOS', 'Y', 'SAN', 'SANTA', 'DA', 'DI', 'VAN', 'VON']);
+function claveOrdenApellido(nombreCompleto) {
+  const t = String(nombreCompleto ?? '').trim().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+  if (t.length < 2) return t.join(' ');
+  let i = t.length;
+  for (let n = 0; n < 2 && i > 1; n++) {            // retrocede 2 apellidos, dejando al menos 1 nombre
+    i--;
+    while (i > 1 && _PARTICULAS_APELLIDO.has(t[i - 1].toUpperCase())) i--;
+  }
+  return [...t.slice(i), ...t.slice(0, i)].join(' ');
+}
+
+// Orden alfabético por apellidos y luego nombres (español: ignora tildes y mayúsculas; la ñ va después de la n)
+function ordenarPorNombre(lista) {
+  const conClave = (lista || []).map(c => ({ c, k: claveOrdenApellido(c.nombre) }));
+  conClave.sort((a, b) => a.k.localeCompare(b.k, 'es', { sensitivity: 'base' }));
+  return conClave.map(x => x.c);
+}
+
+// Texto de búsqueda comparable: minúsculas y sin tildes
+function normalizarBusqueda(s) {
+  return String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+
 // Supabase Auth — usar solo la clave pública (anon), NUNCA la service_role aquí
 const SUPABASE_URL      = "https://ihzgfcojethwxphbnlmg.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImloemdmY29qZXRod3hwaGJubG1nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1ODY2MTAsImV4cCI6MjA5NjE2MjYxMH0.SQgh4URnY-I48yON3ogX4x6t2git5SRND35Vh-EV_og"; // Dashboard → Settings → API → anon public key
@@ -1039,7 +1066,7 @@ async function loadAreaColaboradores() {
 
   // Cache all areas
   STATE.areaColabs = {};
-  (r.areas || []).forEach(a => { STATE.areaColabs[a.areaId] = a; });
+  (r.areas || []).forEach(a => { a.colaboradores = ordenarPorNombre(a.colaboradores); STATE.areaColabs[a.areaId] = a; });
 
   // Render area tabs if managing more than one area
   const tabsRow = document.getElementById("area-tabs-row");
@@ -1097,12 +1124,12 @@ function _renderAreaPanel(areaId) {
 
 function renderAreaTable() {
   const container = document.getElementById("area-table-container");
-  const search    = document.getElementById("area-search").value.toLowerCase();
+  const search    = normalizarBusqueda(document.getElementById("area-search").value);
   let lista = STATE.areaColaboradores;
 
   if (STATE.areaFilter !== "todos") lista = lista.filter(c => c.estado === STATE.areaFilter);
   if (search) lista = lista.filter(c =>
-    c.nombre.toLowerCase().includes(search) || String(c.cedula).includes(search)
+    normalizarBusqueda(c.nombre).includes(search) || String(c.cedula).includes(search)
   );
 
   if (!lista.length) {
@@ -1126,7 +1153,7 @@ function renderAreaTable() {
           <tr class="${STATE.adminSelectedIds.has(c.id) ? "row-selected" : ""}">
             <td data-label=""><input type="checkbox" class="cb-custom" ${STATE.adminSelectedIds.has(c.id) ? "checked" : ""}
               onchange="toggleAdminSelect('${c.id}', this.checked)"></td>
-            <td data-label="Nombre">${esc(c.nombre)}</td>
+            <td data-label="Nombre">${esc(claveOrdenApellido(c.nombre))}</td>
             <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${esc(c.cedula)}</span></td>
             <td data-label="Estado"><span class="badge badge-${c.estado.toLowerCase()}">${c.estado}</span></td>
             <td data-label="Aprobado" style="color:var(--text2); font-size:0.82rem">${esc(c.aprobadoPor || "—")}</td>
@@ -1146,11 +1173,11 @@ function toggleAdminSelect(id, checked) {
 }
 
 function toggleAdminSelectAll(checked) {
-  const search = document.getElementById("area-search").value.toLowerCase();
+  const search = normalizarBusqueda(document.getElementById("area-search").value);
   let lista = STATE.areaColaboradores;
   if (STATE.areaFilter !== "todos") lista = lista.filter(c => c.estado === STATE.areaFilter);
   if (search) lista = lista.filter(c =>
-    c.nombre.toLowerCase().includes(search) || String(c.cedula).includes(search)
+    normalizarBusqueda(c.nombre).includes(search) || String(c.cedula).includes(search)
   );
   lista.forEach(c => { if (checked) STATE.adminSelectedIds.add(c.id); else STATE.adminSelectedIds.delete(c.id); });
   updateAdminBulkBar();
@@ -1199,7 +1226,7 @@ async function abrirGestionar(colabId) {
 
   const content = document.getElementById("modal-gestionar-content");
   content.innerHTML = `
-    <div class="modal-info-row"><span class="modal-info-label">Nombre</span><span class="modal-info-value">${esc(c.nombre)}</span></div>
+    <div class="modal-info-row"><span class="modal-info-label">Nombre</span><span class="modal-info-value">${esc(claveOrdenApellido(c.nombre))}</span></div>
     <div class="modal-info-row"><span class="modal-info-label">Cédula</span><span class="modal-info-value" style="font-family:var(--font-mono)">${esc(c.cedula)}</span></div>
     <div class="modal-info-row"><span class="modal-info-label">Estado en tu área</span><span><span class="badge badge-${c.estado.toLowerCase()}">${c.estado}</span></span></div>
     ${c.observaciones ? `<div class="modal-info-row"><span class="modal-info-label">Observaciones</span><span style="color:var(--red); font-size:0.85rem">${esc(c.observaciones)}</span></div>` : ""}
@@ -1307,17 +1334,26 @@ async function loadSAColaboradores() {
   const r = await api("get_all_colaboradores");
   if (!r.ok) { container.innerHTML = `<div class="table-empty">${r.error}</div>`; return; }
 
-  STATE.saColaboradores = r.colaboradores;
+  STATE.saColaboradores = ordenarPorNombre(r.colaboradores);
   STATE.saSelectedIds   = new Set();
   updateSABulkBar();
   renderSAColaboradoresTable();
 }
 
+// Lista visible del panel SA: aplica el buscador (nombre o cédula, sin tildes ni mayúsculas)
+function _saListaFiltrada() {
+  const q = normalizarBusqueda(document.getElementById("sa-collab-search")?.value);
+  if (!q) return STATE.saColaboradores;
+  return STATE.saColaboradores.filter(c =>
+    normalizarBusqueda(c.nombre).includes(q) || normalizarBusqueda(c.cedula).includes(q));
+}
+
 function renderSAColaboradoresTable() {
   const container = document.getElementById("sa-collab-table-container");
-  const lista     = STATE.saColaboradores;
+  const lista     = _saListaFiltrada();
 
-  if (!lista.length) { container.innerHTML = '<div class="table-empty">No hay colaboradores registrados</div>'; return; }
+  if (!STATE.saColaboradores.length) { container.innerHTML = '<div class="table-empty">No hay colaboradores registrados</div>'; return; }
+  if (!lista.length) { container.innerHTML = '<div class="table-empty">No hay colaboradores con estos criterios</div>'; return; }
 
   const allSelected = lista.length > 0 && lista.every(c => STATE.saSelectedIds.has(c.id));
 
@@ -1340,7 +1376,7 @@ function renderSAColaboradoresTable() {
           <tr class="${STATE.saSelectedIds.has(c.id) ? "row-selected" : ""}">
             <td data-label=""><input type="checkbox" class="cb-custom" ${STATE.saSelectedIds.has(c.id) ? "checked" : ""}
               onchange="toggleSASelect('${c.id}', this.checked)"></td>
-            <td data-label="Nombre">${esc(c.nombre)}</td>
+            <td data-label="Nombre">${esc(claveOrdenApellido(c.nombre))}</td>
             <td data-label="Cédula"><span style="font-family:var(--font-mono); font-size:0.82rem">${esc(c.cedula)}</span></td>
             <td data-label="Tipo" style="font-size:0.8rem; color:${tipoColor}">${tipoLabel}</td>
             <td data-label="Estado"><span class="badge badge-${c.estadoGeneral === "COMPLETO" ? "aprobado" : "pendiente"}">${c.estadoGeneral}</span></td>
@@ -1374,7 +1410,7 @@ function toggleSASelect(id, checked) {
 }
 
 function toggleSASelectAll(checked) {
-  STATE.saColaboradores.forEach(c => {
+  _saListaFiltrada().forEach(c => {
     if (checked) STATE.saSelectedIds.add(c.id);
     else         STATE.saSelectedIds.delete(c.id);
   });
@@ -2520,6 +2556,7 @@ async function loadSAGlobal() {
   const r = await api("get_vista_global");
   if (!r.ok) { container.innerHTML = `<div class="empty-state"><h3>${r.error}</h3></div>`; return; }
 
+  r.colaboradores  = ordenarPorNombre(r.colaboradores);
   STATE._vgData    = r;
   STATE._vgFiltros = { status: "todos", areaId: "" };
 
@@ -2624,7 +2661,7 @@ function renderVGTable() {
                   onchange="toggleVGSelect('${c.id}', this.checked)">` : ""}
               </td>
               <td class="col-nombre">
-                <div class="global-nombre">${escNombre}</div>
+                <div class="global-nombre">${esc(claveOrdenApellido(c.nombre))}</div>
                 <div class="global-cedula">${esc(c.cedula)}</div>
                 <div class="global-acciones">
                   ${done
@@ -2861,7 +2898,7 @@ async function enviarRecordatorioDesdeModal() {
 async function forzarPazSalvo(colaboradorId, nombre) {
   const password = await confirmConPassword(
     "⚡ Forzar Paz y Salvo",
-    `Esto aprobará <strong>todas las áreas</strong> para <strong>${esc(nombre)}</strong> como si cada administrador lo hubiera aprobado.<br><br>Esta acción queda registrada en los logs.`,
+    `Esto aprobará <strong>solo las áreas que le aplican</strong> a <strong>${esc(nombre)}</strong>, cada una a nombre de su responsable asignado (las aprobaciones ya hechas se conservan).<br><br>Esta acción queda registrada en los logs.`,
     "Sí, forzar"
   );
   if (!password) return;
